@@ -17,23 +17,19 @@ export default function UsersPage() {
   const [statusFilter, setStatusFilter] = useState('all')
 
   useEffect(() => {
-    loadUsers()
+    const unsubscribe = DataService.onUsersChange(usersData => {
+      setUsers(usersData)
+      setLoading(false)
+    })
+
+    return () => unsubscribe()
   }, [])
 
   useEffect(() => {
     filterUsers()
   }, [users, searchTerm, roleFilter, statusFilter])
 
-  const loadUsers = async () => {
-    try {
-      const usersData = await DataService.getAllUsers()
-      setUsers(usersData)
-    } catch (error) {
-      console.error('Error loading users:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  
 
   const filterUsers = () => {
     let filtered = users

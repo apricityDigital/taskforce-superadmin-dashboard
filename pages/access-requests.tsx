@@ -8,17 +8,39 @@ export default function AccessRequestsPage() {
   const [statusFilter, setStatusFilter] = useState('all')
 
   useEffect(() => {
-    loadAccessRequests()
+    const unsubscribe = DataService.onAccessRequestsChange(requestsData => {
+      setRequests(requestsData)
+      setLoading(false)
+    })
+
+    return () => unsubscribe()
   }, [])
 
-  const loadAccessRequests = async () => {
+  
+
+  const handleApproveRequest = async (request: AccessRequest) => {
+    if (!confirm(`Are you sure you want to approve the request for "${request.name}"?`)) return
+
     try {
-      const requestsData = await DataService.getAllAccessRequests()
-      setRequests(requestsData)
+      await DataService.approveAccessRequest(request)
+      alert('Request approved successfully!')
+      loadAccessRequests()
     } catch (error) {
-      console.error('Error loading access requests:', error)
-    } finally {
-      setLoading(false)
+      console.error('Error approving request:', error)
+      alert('Error approving request. Please try again.')
+    }
+  }
+
+  const handleRejectRequest = async (requestId: string) => {
+    if (!confirm('Are you sure you want to reject this request?')) return
+
+    try {
+      await DataService.rejectAccessRequest(requestId)
+      alert('Request rejected successfully!')
+      loadAccessRequests()
+    } catch (error) {
+      console.error('Error rejecting request:', error)
+      alert('Error rejecting request. Please try again.')
     }
   }
 
@@ -224,10 +246,16 @@ export default function AccessRequestsPage() {
                       </button>
                       {request.status === 'pending' && (
                         <>
-                          <button className="p-1 text-gray-400 hover:text-success-600">
+                          <button 
+                            onClick={() => handleApproveRequest(request)}
+                            className="p-1 text-gray-400 hover:text-success-600"
+                          >
                             <CheckCircle className="h-4 w-4" />
                           </button>
-                          <button className="p-1 text-gray-400 hover:text-danger-600">
+                          <button 
+                            onClick={() => handleRejectRequest(request.id)}
+                            className="p-1 text-gray-400 hover:text-danger-600"
+                          >
                             <XCircle className="h-4 w-4" />
                           </button>
                         </>

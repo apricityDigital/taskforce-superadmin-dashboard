@@ -16,12 +16,16 @@ import {
   Zap,
   Settings,
   User,
-  Team
+  Team,
+  Plus
 } from 'lucide-react'
 import { DataService } from '@/lib/dataService'
 
 export default function FeederPointsPage() {
   const [feederPoints, setFeederPoints] = useState<any[]>([])
+  const [teams, setTeams] = useState<any[]>([])
+  const [users, setUsers] = useState<any[]>([])
+  const [enhancedFeederPoints, setEnhancedFeederPoints] = useState<any[]>([])
   const [filteredFeederPoints, setFilteredFeederPoints] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -29,44 +33,40 @@ export default function FeederPointsPage() {
   const [assignmentFilter, setAssignmentFilter] = useState('all')
   const [selectedFeederPoint, setSelectedFeederPoint] = useState<any>(null)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editingFeederPoint, setEditingFeederPoint] = useState<any | null>(null)
+  const [showCreateModal, setShowCreateModal] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const [creatingData, setCreatingData] = useState(false)
 
   useEffect(() => {
-    loadFeederPoints()
-    
-    // Set up real-time updates every 30 seconds
-    const interval = setInterval(loadFeederPoints, 30000)
-    return () => clearInterval(interval)
+    const unsubscribeFeederPoints = DataService.onFeederPointsChange(feederPointsData => {
+      setFeederPoints(feederPointsData)
+      setLoading(false)
+    })
+
+    const unsubscribeTeams = DataService.onTeamsChange(teamsData => {
+      setTeams(teamsData)
+    })
+
+    const unsubscribeUsers = DataService.onUsersChange(usersData => {
+      setUsers(usersData)
+    })
+
+    return () => {
+      unsubscribeFeederPoints()
+      unsubscribeTeams()
+      unsubscribeUsers()
+    }
   }, [])
 
   useEffect(() => {
-    filterFeederPoints()
-  }, [feederPoints, searchTerm, statusFilter, assignmentFilter])
-
-  const loadFeederPoints = async () => {
-    try {
-      // Test database connection first
-      console.log('🚀 Starting feeder points load...')
-      await DataService.testDatabaseConnection()
-
-      const [feederPointsData, teamsData, usersData] = await Promise.all([
-        DataService.getAllFeederPoints(),
-        DataService.getTeams(),
-        DataService.getAllUsers()
-      ])
-
-      console.log('🔍 Debug - Feeder Points Data:', feederPointsData)
-      console.log('🔍 Debug - Teams Data:', teamsData.length)
-      console.log('🔍 Debug - Users Data:', usersData.length)
-
-      // Enhance feeder points with real assignment details from database
-      const enhancedFeederPoints = feederPointsData.map(fp => {
+    if (feederPoints.length > 0 && users.length > 0 && teams.length > 0) {
+      const enhanced = feederPoints.map(fp => {
         let assignmentDetails = null
 
-        // Check for individual assignment
         if (fp.assignedUserId) {
-          const assignedUser = usersData.find(user => user.id === fp.assignedUserId)
+          const assignedUser = users.find(user => user.id === fp.assignedUserId)
           if (assignedUser) {
             assignmentDetails = {
               type: 'individual',
@@ -78,9 +78,8 @@ export default function FeederPointsPage() {
           }
         }
 
-        // Check for team assignment
         if (fp.assignedTeamId) {
-          const assignedTeam = teamsData.find(team => team.id === fp.assignedTeamId)
+          const assignedTeam = teams.find(team => team.id === fp.assignedTeamId)
           if (assignedTeam) {
             const activeMembers = assignedTeam.members?.filter(member => member.isActive) || []
             assignmentDetails = {
@@ -98,20 +97,18 @@ export default function FeederPointsPage() {
           assignmentDetails
         }
       })
-
-      setFeederPoints(enhancedFeederPoints)
-      setConnectionStatus('connected')
-    } catch (error) {
-      console.error('❌ Error loading feeder points:', error)
-      setFeederPoints([]) // Set empty array on error, no dummy data
-      setConnectionStatus('error')
-    } finally {
-      setLoading(false)
+      setEnhancedFeederPoints(enhanced)
     }
-  }
+  }, [feederPoints, teams, users])
+
+  useEffect(() => {
+    filterFeederPoints()
+  }, [feederPoints, searchTerm, statusFilter, assignmentFilter])
+
+  
 
   const filterFeederPoints = () => {
-    let filtered = feederPoints
+    let filtered = enhancedFeederPoints
 
     // Search filter
     if (searchTerm) {
@@ -146,6 +143,53 @@ export default function FeederPointsPage() {
   const handleViewDetails = (feederPoint: any) => {
     setSelectedFeederPoint(feederPoint)
     setShowDetailsModal(true)
+  }
+
+  const handleEditFeederPoint = (feederPoint: any) => {
+    setEditingFeederPoint({ ...feederPoint })
+    setShowEditModal(true)
+  }
+
+  const handleSaveFeederPoint = async () => {
+    if (!editingFeederPoint) return
+
+    try {
+      await DataService.updateFeederPoint(editingFeederPoint.id, editingFeederPoint)
+      await loadFeederPoints()
+      setShowEditModal(false)
+      setEditingFeederPoint(null)
+      alert('Feeder point updated successfully!')
+    } catch (error) {
+      console.error('Error updating feeder point:', error)
+      alert('Error updating feeder point. Please try again.')
+    }
+  }
+
+  const handleCreateFeederPoint = async (feederPointData: any) => {
+    try {
+      await DataService.createFeederPoint(feederPointData)
+      await loadFeederPoints()
+      setShowCreateModal(false)
+      alert('Feeder point created successfully!')
+    } catch (error) {
+      console.error('Error creating feeder point:', error)
+      alert('Error creating feeder point. Please try again.')
+    }
+  }
+
+  const handleDeleteFeederPoint = async (feederPoint: any) => {
+    if (!confirm(`Are you sure you want to delete feeder point "${feederPoint.name}"?`)) {
+      return
+    }
+
+    try {
+      await DataService.deleteFeederPoint(feederPoint.id)
+      await loadFeederPoints()
+      alert('Feeder point deleted successfully!')
+    } catch (error) {
+      console.error('Error deleting feeder point:', error)
+      alert('Error deleting feeder point. Please try again.')
+    }
   }
 
   const createSampleData = async () => {
@@ -223,6 +267,13 @@ export default function FeederPointsPage() {
           </div>
 
           <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="btn-primary flex items-center space-x-2"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Create Feeder Point</span>
+            </button>
             <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm ${
               connectionStatus === 'connected' ? 'bg-green-100 text-green-800' :
               connectionStatus === 'error' ? 'bg-red-100 text-red-800' :
@@ -528,6 +579,20 @@ export default function FeederPointsPage() {
                       >
                         <Eye className="h-4 w-4" />
                       </button>
+                      <button
+                        onClick={() => handleEditFeederPoint(feederPoint)}
+                        className="text-yellow-600 hover:text-yellow-900 mr-3"
+                        title="Edit Feeder Point"
+                      >
+                        <Edit className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteFeederPoint(feederPoint)}
+                        className="text-red-600 hover:text-red-900"
+                        title="Delete Feeder Point"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -567,6 +632,69 @@ export default function FeederPointsPage() {
               )}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Create Feeder Point Modal */}
+      {showCreateModal && (
+        <FeederPointFormModal
+          title="Create Feeder Point"
+          onClose={() => setShowCreateModal(false)}
+          onSave={handleCreateFeederPoint}
+        />
+      )}
+
+      {/* Edit Feeder Point Modal */}
+      {showEditModal && editingFeederPoint && (
+        <FeederPointFormModal
+          title="Edit Feeder Point"
+          feederPoint={editingFeederPoint}
+          onClose={() => setShowEditModal(false)}
+          onSave={handleSaveFeederPoint}
+        />
+      )}
+    </div>
+  )
+}
+
+function FeederPointFormModal({ title, feederPoint, onClose, onSave }: any) {
+  const [formData, setFormData] = useState(feederPoint || {})
+
+  const handleChange = (e: any) => {
+    const { name, value } = e.target
+    setFormData({ ...formData, [name]: value })
+  }
+
+  const handleSave = () => {
+    onSave(formData)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75" onClick={onClose} />
+        <div className="bg-white rounded-lg shadow-xl transform transition-all sm:max-w-lg sm:w-full">
+          <div className="px-4 py-5 sm:p-6">
+            <h3 className="text-lg leading-6 font-medium text-gray-900">{title}</h3>
+            <div className="mt-4 space-y-4">
+              <input type="text" name="name" value={formData.name || ''} onChange={handleChange} placeholder="Name" className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+              <input type="text" name="location.address" value={formData.location?.address || ''} onChange={handleChange} placeholder="Address" className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+              <select name="status" value={formData.status || ''} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md">
+                <option value="active">Active</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="inactive">Inactive</option>
+              </select>
+              <select name="priority" value={formData.priority || ''} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md">
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+          </div>
+          <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+            <button type="button" onClick={handleSave} className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 sm:ml-3 sm:w-auto sm:text-sm">Save</button>
+            <button type="button" onClick={onClose} className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancel</button>
+          </div>
         </div>
       </div>
     </div>

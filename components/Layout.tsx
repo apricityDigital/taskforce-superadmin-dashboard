@@ -15,10 +15,10 @@ import {
   Bell,
   FileText
 } from 'lucide-react'
+import { useAuth } from '@/contexts/AuthContext'
 
 interface LayoutProps {
   children: React.ReactNode
-  onLogout: () => void
 }
 
 const navigation = [
@@ -28,14 +28,18 @@ const navigation = [
   { name: 'Feeder Points', href: '/feeder-points', icon: Activity },
   { name: 'Daily Reports', href: '/daily-reports', icon: FileText },
   { name: 'Complaints', href: '/complaints', icon: MessageSquare },
-  { name: 'IP Security', href: '/ip-security', icon: Shield },
-  { name: 'Activity Log', href: '/activity', icon: Activity },
   { name: 'Settings', href: '/settings', icon: Settings },
 ]
 
-export default function Layout({ children, onLogout }: LayoutProps) {
+export default function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const router = useRouter()
+  const { logout } = useAuth()
+
+  const handleLogout = async () => {
+    await logout()
+    router.push('/login')
+  }
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
@@ -84,7 +88,7 @@ export default function Layout({ children, onLogout }: LayoutProps) {
               </button>
 
               <button
-                onClick={onLogout}
+                onClick={handleLogout}
                 className="flex items-center space-x-1 sm:space-x-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 px-2 sm:px-3 py-2 rounded-lg transition-colors"
               >
                 <LogOut className="h-4 w-4 sm:h-5 sm:w-5" />
