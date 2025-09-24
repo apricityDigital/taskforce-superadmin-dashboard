@@ -1,5 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'export',
+  basePath: '/taskforce-superadmin-dashboard',
+  images: {
+    unoptimized: true,
+  },
   reactStrictMode: true,
   swcMinify: true,
   env: {

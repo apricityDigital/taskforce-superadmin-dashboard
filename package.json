@@ -6,9 +6,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "next dev",
-    "predeploy":"npm run build",
-    "deploy":"gh-pages -d build",
-    "build": "next build",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d out",
+    "build": "next build && node -e \"require('fs').writeFileSync('out/.nojekyll', '')\"",
     "start": "next start",
     "lint": "next lint"
   },
@@ -45,7 +45,8 @@
   },
   "devDependencies": {
     "eslint": "8.0.0",
-    "eslint-config-next": "14.0.0"
+    "eslint-config-next": "14.0.0",
+    "gh-pages": "^6.3.0"
   },
   "keywords": [
     "admin",
