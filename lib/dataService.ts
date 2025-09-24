@@ -52,6 +52,11 @@ export interface ComplianceReport {
   dailyTripId: string; // Unique identifier for the day's trips (userId_feederPointId_date)
   aiAnalysis?: string;
   ministryReport?: string;
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
+  description?: string;
+  title?: string;
+  submittedBy?: string;
+  attachments?: ComplianceReportAttachment[];
 }
 
 export interface ComplianceAnswer {
@@ -106,6 +111,27 @@ export interface IPRecord {
   registeredAt: any;
   lastUsed: any;
   isActive: boolean;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  members: User[];
+}
+
+export interface FeederPoint {
+  id: string;
+  name: string;
+  assignedUserId?: string;
+  assignedTeamId?: string;
+  status: 'active' | 'maintenance' | 'inactive';
+  location: {
+    address: string;
+    latitude: number;
+    longitude: number;
+  };
+  priority: 'high' | 'medium' | 'low';
+  lastInspection?: any; // Firestore timestamp
 }
 
 export class DataService {
@@ -278,38 +304,180 @@ export class DataService {
   }
 
   // Get all feeder points
-  static onFeederPointsChange(callback: (points: any[]) => void) {
+  static onFeederPointsChange(callback: (points: FeederPoint[]) => void) {
     const q = query(collection(db, 'feederPoints'));
     return onSnapshot(q, (snapshot) => {
       const points = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      }));
+      } as FeederPoint));
       callback(points);
     });
   }
 
-  static async getAllFeederPoints(): Promise<any[]> {
+  static async getAllFeederPoints(): Promise<FeederPoint[]> {
     const q = query(collection(db, 'feederPoints'));
     const snapshot = await getDocs(q);
     const points = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
-    }));
+    } as FeederPoint));
     return points;
   }
 
   // Get all teams
-  static onTeamsChange(callback: (teams: any[]) => void) {
+  static onTeamsChange(callback: (teams: Team[]) => void) {
     const q = query(collection(db, 'teams'));
     return onSnapshot(q, (snapshot) => {
       const teams = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      }));
+      } as Team));
       callback(teams);
     });
   }
 
-  // Other functions omitted for brevity...
+  static async updateFeederPoint(id: string, data: Partial<FeederPoint>): Promise<void> {
+    const feederPointRef = doc(db, 'feederPoints', id);
+    await updateDoc(feederPointRef, data);
+  }
+
+  static async createFeederPoint(data: Partial<FeederPoint>): Promise<void> {
+    const feederPointsCollection = collection(db, 'feederPoints');
+    await setDoc(doc(feederPointsCollection), data, { merge: true });
+  }
+
+  static async deleteFeederPoint(id: string): Promise<void> {
+    const feederPointRef = doc(db, 'feederPoints', id);
+    await deleteDoc(feederPointRef);
+  }
+
+  static async createSampleFeederPoints(): Promise<void> {
+    const samplePoints = [
+      { name: 'FP-001', status: 'active', priority: 'high', location: { address: '123 Main St', latitude: 34.0522, longitude: -118.2437 } },
+      { name: 'FP-002', status: 'maintenance', priority: 'medium', location: { address: '456 Oak Ave', latitude: 34.0522, longitude: -118.2437 } },
+      { name: 'FP-003', status: 'inactive', priority: 'low', location: { address: '789 Pine Ln', latitude: 34.0522, longitude: -118.2437 } },
+    ];
+
+    const feederPointsCollection = collection(db, 'feederPoints');
+    for (const point of samplePoints) {
+      await setDoc(doc(feederPointsCollection), point);
+    }
+  }
+
+  static async getRecentActivity(): Promise<any[]> {
+    try {
+      const q = query(collection(db, 'recentActivity'), orderBy('timestamp', 'desc'), limit(10));
+      const snapshot = await getDocs(q);
+      const activity = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      return activity;
+    } catch (error) {
+      console.error('Error fetching recent activity:', error);
+      return [];
+    }
+  }
+
+  static async approveAccessRequest(request: AccessRequest): Promise<void> {
+    try {
+      const requestRef = doc(db, 'accessRequests', request.id);
+      await updateDoc(requestRef, {
+        status: 'approved',
+        reviewedAt: serverTimestamp(),
+        reviewedBy: 'AdminUserPlaceholder', // Replace with actual admin user ID/name
+        updatedAt: serverTimestamp()
+      });
+      console.log('✅ Access request approved:', request.id);
+    } catch (error) {
+      console.error('❌ Error approving access request:', error);
+      throw error;
+    }
+  }
+
+  static async rejectAccessRequest(requestId: string): Promise<void> {
+    try {
+      const requestRef = doc(db, 'accessRequests', requestId);
+      await updateDoc(requestRef, {
+        status: 'rejected',
+        reviewedAt: serverTimestamp(),
+        reviewedBy: 'AdminUserPlaceholder', // Replace with actual admin user ID/name
+        updatedAt: serverTimestamp()
+      });
+      console.log('✅ Access request rejected:', requestId);
+    } catch (error) {
+      console.error('❌ Error rejecting access request:', error);
+      throw error;
+    }
+  }
+
+  static async updateComplaint(complaintId: string, complaint: Complaint): Promise<void> {
+    try {
+      const complaintRef = doc(db, 'complaints', complaintId);
+      await updateDoc(complaintRef, {
+        ...complaint,
+        updatedAt: serverTimestamp()
+      });
+      console.log('✅ Complaint updated:', complaintId);
+    } catch (error) {
+      console.error('❌ Error updating complaint:', error);
+      throw error;
+    }
+  }
+
+  static async deleteComplaint(complaintId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'complaints', complaintId));
+      console.log('✅ Complaint deleted:', complaintId);
+    } catch (error) {
+      console.error('❌ Error deleting complaint:', error);
+      throw error;
+    }
+  }
+
+  static async testDatabaseConnection(): Promise<boolean> {
+    try {
+      console.log("Attempting to fetch collections from Firestore...");
+      const collections = await Promise.all([
+        getDocs(collection(db, 'approvedUsers')),
+        getDocs(collection(db, 'accessRequests')),
+        getDocs(collection(db, 'complianceReports')),
+        getDocs(collection(db, 'feederPoints')),
+        getDocs(collection(db, 'teams')),
+      ]);
+      console.log('Successfully fetched collections:');
+      console.log(`- approvedUsers: ${collections[0].size} documents`);
+      console.log(`- accessRequests: ${collections[1].size} documents`);
+      console.log(`- complianceReports: ${collections[2].size} documents`);
+      console.log(`- feederPoints: ${collections[3].size} documents`);
+      console.log(`- teams: ${collections[4].size} documents`);
+      return true;
+    } catch (error) {
+      console.error("Error testing database connection:", error);
+      return false;
+    }
+  }
+
+  static async getUserReports(userId: string): Promise<ComplianceReport[]> {
+    const q = query(collection(db, 'complianceReports'), where('userId', '==', userId));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ComplianceReport));
+  }
+
+  static async getUserFeederPoints(userId: string): Promise<FeederPoint[]> {
+    const q = query(collection(db, 'feederPoints'), where('assignedUserId', '==', userId));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FeederPoint));
+  }
+
+  static async updateUser(id: string, data: Partial<User>): Promise<void> {
+    const userRef = doc(db, 'approvedUsers', id);
+    await updateDoc(userRef, data);
+  }
+
+  static async deleteUser(id: string): Promise<void> {
+    const userRef = doc(db, 'approvedUsers', id);
+    await deleteDoc(userRef);
+  }
 }

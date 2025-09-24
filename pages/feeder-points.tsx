@@ -15,16 +15,15 @@ import {
   Activity,
   Zap,
   Settings,
-  User,
-  Team,
+  User as UserIcon,
   Plus
 } from 'lucide-react'
-import { DataService } from '@/lib/dataService'
+import { DataService, FeederPoint, Team, User } from '@/lib/dataService'
 
 export default function FeederPointsPage() {
-  const [feederPoints, setFeederPoints] = useState<any[]>([])
-  const [teams, setTeams] = useState<any[]>([])
-  const [users, setUsers] = useState<any[]>([])
+  const [feederPoints, setFeederPoints] = useState<FeederPoint[]>([])
+  const [teams, setTeams] = useState<Team[]>([])
+  const [users, setUsers] = useState<User[]>([])
   const [enhancedFeederPoints, setEnhancedFeederPoints] = useState<any[]>([])
   const [filteredFeederPoints, setFilteredFeederPoints] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -105,7 +104,12 @@ export default function FeederPointsPage() {
     filterFeederPoints()
   }, [feederPoints, searchTerm, statusFilter, assignmentFilter])
 
-  
+  const loadFeederPoints = async () => {
+    setLoading(true);
+    const points = await DataService.getAllFeederPoints();
+    setFeederPoints(points);
+    setLoading(false);
+  };
 
   const filterFeederPoints = () => {
     let filtered = enhancedFeederPoints
@@ -241,14 +245,14 @@ export default function FeederPointsPage() {
   }
 
   const stats = {
-    total: feederPoints.length,
-    active: feederPoints.filter(fp => fp.status === 'active').length,
-    maintenance: feederPoints.filter(fp => fp.status === 'maintenance').length,
-    inactive: feederPoints.filter(fp => fp.status === 'inactive').length,
-    assigned: feederPoints.filter(fp => fp.assignmentDetails).length,
-    unassigned: feederPoints.filter(fp => !fp.assignmentDetails).length,
-    individual: feederPoints.filter(fp => fp.assignmentDetails?.type === 'individual').length,
-    team: feederPoints.filter(fp => fp.assignmentDetails?.type === 'team').length
+    total: enhancedFeederPoints.length,
+    active: enhancedFeederPoints.filter(fp => fp.status === 'active').length,
+    maintenance: enhancedFeederPoints.filter(fp => fp.status === 'maintenance').length,
+    inactive: enhancedFeederPoints.filter(fp => fp.status === 'inactive').length,
+    assigned: enhancedFeederPoints.filter(fp => fp.assignmentDetails).length,
+    unassigned: enhancedFeederPoints.filter(fp => !fp.assignmentDetails).length,
+    individual: enhancedFeederPoints.filter(fp => fp.assignmentDetails?.type === 'individual').length,
+    team: enhancedFeederPoints.filter(fp => fp.assignmentDetails?.type === 'team').length
   }
 
   return (
@@ -539,7 +543,7 @@ export default function FeederPointsPage() {
                       {feederPoint.assignmentDetails ? (
                         <div className="flex items-center">
                           {feederPoint.assignmentDetails.type === 'individual' ? (
-                            <User className="h-4 w-4 text-blue-500 mr-2" />
+                            <UserIcon className="h-4 w-4 text-blue-500 mr-2" />
                           ) : (
                             <Users className="h-4 w-4 text-purple-500 mr-2" />
                           )}

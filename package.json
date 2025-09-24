@@ -1,10 +1,13 @@
 {
+  "homepage": "https://github.com/apricityDigital/taskforce-superadmin-dashboard",
   "name": "super-admin-dashboard",
   "version": "1.0.0",
   "description": "Centralized Super Admin Dashboard for Taskforce Management",
   "main": "index.js",
   "scripts": {
     "dev": "next dev",
+    "predeploy":"npm run build",
+    "deploy":"gh-pages -d build",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -20,7 +23,7 @@
     "class-variance-authority": "0.7.0",
     "clsx": "2.0.0",
     "date-fns": "2.30.0",
-    "firebase": "9.6.0",
+    "firebase": "^9.23.0",
     "framer-motion": "10.16.16",
     "lottie-react": "2.4.0",
     "lucide-react": "0.292.0",

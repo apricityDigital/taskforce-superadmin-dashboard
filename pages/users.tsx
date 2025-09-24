@@ -29,7 +29,12 @@ export default function UsersPage() {
     filterUsers()
   }, [users, searchTerm, roleFilter, statusFilter])
 
-  
+  const loadUsers = async () => {
+    setLoading(true);
+    const usersData = await DataService.getAllUsers();
+    setUsers(usersData);
+    setLoading(false);
+  };
 
   const filterUsers = () => {
     let filtered = users

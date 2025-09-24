@@ -14,12 +14,17 @@ export default function ComplaintsPage() {
   const [editingComplaint, setEditingComplaint] = useState<Complaint | null>(null)
   const [showEditModal, setShowEditModal] = useState(false)
 
-  useEffect(() => {
+  const loadComplaints = () => {
+    setLoading(true)
     const unsubscribe = DataService.onComplaintsChange(complaintsData => {
       setComplaints(complaintsData)
       setLoading(false)
     })
+    return unsubscribe
+  }
 
+  useEffect(() => {
+    const unsubscribe = loadComplaints()
     return () => unsubscribe()
   }, [])
 

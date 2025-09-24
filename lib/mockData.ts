@@ -1,6 +1,6 @@
-import { Report } from './dataService';
+import { ComplianceReport } from './dataService';
 
-export const mockReports: Report[] = [
+export const mockReports: ComplianceReport[] = [
   {
     id: '1',
     teamId: 'team-1',
@@ -11,7 +11,7 @@ export const mockReports: Report[] = [
     description: 'The waste at Feeder Point 1 is overflowing and needs to be collected immediately.',
     status: 'pending',
     priority: 'high',
-    submittedDate: new Date().toISOString(),
+    submittedAt: new Date().toISOString(),
     submittedBy: 'John Doe',
     attachments: [
       {
@@ -22,12 +22,20 @@ export const mockReports: Report[] = [
         uploadedDate: new Date().toISOString(),
       },
     ],
-    location: {
+    submittedLocation: {
       latitude: 12.9716,
       longitude: 77.5946,
       address: 'Bangalore, India',
     },
-    type: 'complaint',
+    userId: 'user-1',
+    userName: 'John Doe',
+    distanceFromFeederPoint: 100,
+    answers: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tripNumber: 1,
+    tripDate: '2025-09-20',
+    dailyTripId: 'user-1_fp-1_2025-09-20',
   },
   {
     id: '2',
@@ -39,14 +47,22 @@ export const mockReports: Report[] = [
     description: 'Scheduled maintenance at Feeder Point 2 has been completed successfully.',
     status: 'approved',
     priority: 'medium',
-    submittedDate: new Date().toISOString(),
+    submittedAt: new Date().toISOString(),
     submittedBy: 'Jane Smith',
     attachments: [],
-    location: {
+    submittedLocation: {
       latitude: 12.9716,
       longitude: 77.5946,
       address: 'Bangalore, India',
     },
-    type: 'maintenance',
+    userId: 'user-2',
+    userName: 'Jane Smith',
+    distanceFromFeederPoint: 50,
+    answers: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    tripNumber: 2,
+    tripDate: '2025-09-20',
+    dailyTripId: 'user-2_fp-2_2025-09-20',
   },
 ];

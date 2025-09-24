@@ -122,7 +122,7 @@ export default function SeedData() {
       logs.push(`🎉 Successfully created ${sampleFeederPoints.length} feeder points!`)
       
     } catch (error) {
-      logs.push(`❌ Error seeding data: ${error.message}`)
+      logs.push(`❌ Error seeding data: ${(error as Error).message}`)
     }
     
     setResults(logs)

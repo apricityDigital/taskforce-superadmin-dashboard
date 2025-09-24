@@ -7,12 +7,17 @@ export default function AccessRequestsPage() {
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('all')
 
-  useEffect(() => {
+  const loadAccessRequests = () => {
+    setLoading(true)
     const unsubscribe = DataService.onAccessRequestsChange(requestsData => {
       setRequests(requestsData)
       setLoading(false)
     })
+    return unsubscribe
+  }
 
+  useEffect(() => {
+    const unsubscribe = loadAccessRequests()
     return () => unsubscribe()
   }, [])
 
