@@ -1,3 +1,4 @@
+import React from 'react'
 import { useState, useEffect } from 'react'
 import { Shield, Eye, EyeOff, Sparkles, Zap, Crown } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'

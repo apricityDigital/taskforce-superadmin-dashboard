@@ -2,6 +2,7 @@
 const nextConfig = {
   output: 'export',
   basePath: '/taskforce-superadmin-dashboard',
+  assetPrefix: '/taskforce-superadmin-dashboard/', // ✅ Important for GitHub Pages
   images: {
     unoptimized: true,
   },
@@ -15,6 +16,6 @@ const nextConfig = {
     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "106582224531",
     NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:106582224531:web:7aa3faa5c8b458fc54a766"
   }
-}
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;

@@ -1,17 +1,16 @@
 {
-  "homepage": "https://github.com/apricityDigital/taskforce-superadmin-dashboard",
+  "homepage": "https://apricityDigital.github.io/taskforce-superadmin-dashboard/",
   "name": "super-admin-dashboard",
   "version": "1.0.0",
   "description": "Centralized Super Admin Dashboard for Taskforce Management",
   "main": "index.js",
   "scripts": {
-    "dev": "next dev",
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d out",
-    "build": "next build && node -e \"require('fs').writeFileSync('out/.nojekyll', '')\"",
-    "start": "next start",
-    "lint": "next lint"
-  },
+  "dev": "next dev",
+  "build": "next build && node -e \"require('fs').writeFileSync('out/.nojekyll', '')\"",
+  "predeploy": "npm run build",
+  "deploy": "gh-pages -d out"
+}
+,
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@headlessui/react": "1.7.17",
