@@ -61,48 +61,56 @@ export default function SimpleDashboard() {
       value: stats?.totalUsers || 0,
       icon: Users,
       color: 'bg-gradient-to-br from-blue-500 to-blue-600',
+      subtitle: `${stats?.activeUsers || 0} active`
     },
     {
-      title: 'Active Users',
-      value: stats?.activeUsers || 0,
-      icon: CheckCircle,
+      title: 'Admin Users',
+      value: stats?.adminUsers || 0,
+      icon: Shield,
+      color: 'bg-gradient-to-br from-red-500 to-red-600',
+      subtitle: `${stats?.activeAdmins || 0} active`
+    },
+    {
+      title: 'Task Force Team',
+      value: stats?.taskForceUsers || 0,
+      icon: Activity,
       color: 'bg-gradient-to-br from-emerald-500 to-emerald-600',
+      subtitle: `${stats?.activeTaskForce || 0} active`
+    },
+    {
+      title: 'Commissioners',
+      value: stats?.commissionerUsers || 0,
+      icon: UserCheck,
+      color: 'bg-gradient-to-br from-purple-500 to-purple-600',
+      subtitle: `${stats?.activeCommissioners || 0} active`
     },
     {
       title: 'Pending Requests',
       value: stats?.pendingRequests || 0,
       icon: UserCheck,
       color: 'bg-gradient-to-br from-amber-500 to-amber-600',
-    },
-    {
-      title: 'Security Events',
-      value: stats?.totalIPRecords || 0,
-      icon: Shield,
-      color: 'bg-gradient-to-br from-purple-500 to-purple-600',
+      subtitle: 'Awaiting approval'
     },
     {
       title: 'Total Reports',
       value: stats?.totalComplaints || 0,
       icon: MessageSquare,
-      color: 'bg-gradient-to-br from-red-500 to-red-600',
+      color: 'bg-gradient-to-br from-orange-500 to-orange-600',
+      subtitle: 'Compliance reports'
     },
     {
-      title: 'Inspections',
-      value: stats?.totalInspections || 0,
-      icon: Activity,
+      title: 'Feeder Points',
+      value: stats?.totalFeederPoints || 0,
+      icon: MapPin,
       color: 'bg-gradient-to-br from-cyan-500 to-cyan-600',
+      subtitle: 'Monitoring locations'
     },
     {
       title: 'Teams Active',
       value: stats?.totalTeams || 0,
       icon: Users,
       color: 'bg-gradient-to-br from-indigo-500 to-indigo-600',
-    },
-    {
-      title: 'Feeder Points',
-      value: stats?.totalFeederPoints || 0,
-      icon: TrendingUp,
-      color: 'bg-gradient-to-br from-teal-500 to-teal-600',
+      subtitle: 'Operational teams'
     }
   ]
 
@@ -118,7 +126,7 @@ export default function SimpleDashboard() {
         </div>
         <div className="absolute top-0 right-0 w-32 h-32 sm:w-64 sm:h-64 bg-white/10 rounded-full blur-3xl opacity-50"></div>
         <button onClick={loadDashboardData} className="absolute top-4 right-4 btn-secondary p-2">
-            <RefreshCw className="h-5 w-5" />
+          <RefreshCw className="h-5 w-5" />
         </button>
       </div>
 
@@ -132,6 +140,9 @@ export default function SimpleDashboard() {
                 <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3 space-y-1 sm:space-y-0">
                   <div className="text-2xl sm:text-3xl font-bold text-gray-900">{stat.value}</div>
                 </div>
+                {stat.subtitle && (
+                  <p className="text-xs text-gray-500 mt-1">{stat.subtitle}</p>
+                )}
               </div>
 
               <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl ${stat.color} transform group-hover:rotate-12 transition-transform duration-300 flex-shrink-0`}>
@@ -218,16 +229,14 @@ export default function SimpleDashboard() {
             <div className="space-y-3">
               {feederPoints.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((fp, index) => (
                 <div key={fp.id || index} className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg">
-                  <div className={`p-2 rounded-full ${
-                    fp.status === 'active' ? 'bg-green-100' :
+                  <div className={`p-2 rounded-full ${fp.status === 'active' ? 'bg-green-100' :
                     fp.status === 'maintenance' ? 'bg-yellow-100' :
-                    'bg-red-100'
-                  }`}>
-                    <Zap className={`h-4 w-4 ${
-                      fp.status === 'active' ? 'text-green-600' :
+                      'bg-red-100'
+                    }`}>
+                    <Zap className={`h-4 w-4 ${fp.status === 'active' ? 'text-green-600' :
                       fp.status === 'maintenance' ? 'text-yellow-600' :
-                      'text-red-600'
-                    }`} />
+                        'text-red-600'
+                      }`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900">
@@ -236,11 +245,10 @@ export default function SimpleDashboard() {
                     <div className="flex items-center space-x-2 text-xs text-gray-500">
                       <MapPin className="h-3 w-3" />
                       <span>{fp.location?.address || 'No location'}</span>
-                      <span className={`px-2 py-1 rounded-full ${
-                        fp.status === 'active' ? 'bg-green-100 text-green-800' :
+                      <span className={`px-2 py-1 rounded-full ${fp.status === 'active' ? 'bg-green-100 text-green-800' :
                         fp.status === 'maintenance' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-red-100 text-red-800'
-                      }`}>
+                          'bg-red-100 text-red-800'
+                        }`}>
                         {fp.status}
                       </span>
                     </div>

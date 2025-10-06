@@ -10,6 +10,15 @@ export interface DashboardStats {
   totalFeederPoints: number;
   totalTeams: number;
   totalIPRecords: number;
+  // Role-based statistics
+  adminUsers: number;
+  taskForceUsers: number;
+  commissionerUsers: number;
+  inactiveUsers: number;
+  // Additional role-based metrics
+  activeAdmins: number;
+  activeTaskForce: number;
+  activeCommissioners: number;
 }
 
 export interface User {
@@ -67,11 +76,11 @@ export interface ComplianceAnswer {
 }
 
 export interface ComplianceReportAttachment {
-    id: string;
-    type: 'photo' | 'video' | 'audio' | 'document';
-    url: string;
-    filename: string;
-    uploadedDate: string;
+  id: string;
+  type: 'photo' | 'video' | 'audio' | 'document';
+  url: string;
+  filename: string;
+  uploadedDate: string;
 }
 
 export interface AccessRequest {
@@ -158,6 +167,19 @@ export class DataService {
         getDocs(collection(db, 'ipRecords'))
       ]);
 
+      // Calculate role-based statistics
+      const allUsers = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+      const activeUsers = activeUsersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+
+      const adminUsers = allUsers.filter(user => user.role === 'admin').length;
+      const taskForceUsers = allUsers.filter(user => user.role === 'task_force_team').length;
+      const commissionerUsers = allUsers.filter(user => user.role === 'commissioner').length;
+      const inactiveUsers = allUsers.filter(user => !user.isActive).length;
+
+      const activeAdmins = activeUsers.filter(user => user.role === 'admin').length;
+      const activeTaskForce = activeUsers.filter(user => user.role === 'task_force_team').length;
+      const activeCommissioners = activeUsers.filter(user => user.role === 'commissioner').length;
+
       return {
         totalUsers: usersSnapshot.size,
         activeUsers: activeUsersSnapshot.size,
@@ -166,7 +188,16 @@ export class DataService {
         totalInspections: inspectionsSnapshot.size,
         totalFeederPoints: feederPointsSnapshot.size,
         totalTeams: teamsSnapshot.size,
-        totalIPRecords: ipRecordsSnapshot.size
+        totalIPRecords: ipRecordsSnapshot.size,
+        // Role-based statistics
+        adminUsers,
+        taskForceUsers,
+        commissionerUsers,
+        inactiveUsers,
+        // Additional role-based metrics
+        activeAdmins,
+        activeTaskForce,
+        activeCommissioners
       };
     } catch (error) {
       console.error('Error fetching dashboard stats:', error);
@@ -178,7 +209,14 @@ export class DataService {
         totalInspections: 0,
         totalFeederPoints: 0,
         totalTeams: 0,
-        totalIPRecords: 0
+        totalIPRecords: 0,
+        adminUsers: 0,
+        taskForceUsers: 0,
+        commissionerUsers: 0,
+        inactiveUsers: 0,
+        activeAdmins: 0,
+        activeTaskForce: 0,
+        activeCommissioners: 0
       };
     }
   }
@@ -263,8 +301,8 @@ export class DataService {
 
   // Update compliance report status
   static async updateComplianceReportStatus(
-    reportId: string, 
-    status: ComplianceReport['status'], 
+    reportId: string,
+    status: ComplianceReport['status'],
     adminNotes?: string,
     reviewedBy?: string
   ): Promise<void> {
