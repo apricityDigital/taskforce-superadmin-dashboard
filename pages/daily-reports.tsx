@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import {
   FileText,
@@ -28,6 +28,10 @@ import {
 import { DataService, ComplianceReport } from '@/lib/dataService'
 import { AIService, DailyReportData } from '@/lib/aiService'
 import { useAuth } from '@/contexts/AuthContext'
+import { SimpleBarChart } from '@/components/charts/SimpleBarChart'
+import { SummaryTrendChart } from '@/components/charts/SummaryTrendChart'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 
 interface ReportSummary {
   total: number;
@@ -41,6 +45,12 @@ const StatusPieChart = dynamic(() => import('@/components/charts/StatusPieChart'
   ssr: false,
 })
 
+interface AiSummaryChartData {
+  pieData: Array<{ name: string; value: number; color: string; }>;
+  barData: Array<{ name: string; yes: number; no: number; }>;
+  individualBarData: { [key: string]: Array<{ name: string; value: number; color: string; }> };
+}
+
 export default function DailyReportsPage() {
   const { user } = useAuth()
   const [reports, setReports] = useState<ComplianceReport[]>([])
@@ -49,7 +59,7 @@ export default function DailyReportsPage() {
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0])
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
-  const [filterStatus, setFilterStatus] = useState<ComplianceReport['status'] | 'all'>('all') // 'all', 'pending', 'approved', 'rejected', 'requires_action'
+  const [filterStatus, setFilterStatus] = useState<ComplianceReport['status'] | 'all'>('all')
   const [generatingAI, setGeneratingAI] = useState(false)
   const [selectedReport, setSelectedReport] = useState<ComplianceReport | null>(null)
   const [adminNotes, setAdminNotes] = useState('')
@@ -64,34 +74,54 @@ export default function DailyReportsPage() {
   const [showCollage, setShowCollage] = useState(false)
   const [allImages, setAllImages] = useState<Array<{ url: string, title: string, type: 'answer' | 'attachment' }>>([])
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
+  const summaryRef = useRef<HTMLDivElement>(null);
 
-  const [aiSummaryPieData, setAiSummaryPieData] = useState<Array<{ name: string; value: number; color: string }>>([])
+  const [aiSummaryChartData, setAiSummaryChartData] = useState<AiSummaryChartData | null>(null)
 
-  const parseAiSummaryForChart = (summary: string | null): Array<{ name: string; value: number; color: string }> => {
-    if (!summary) return []
+  const handleDownloadPdf = () => {
+    if (summaryRef.current) {
+      html2canvas(summaryRef.current).then((canvas) => {
+        const imgData = canvas.toDataURL('image/png');
+        const pdf = new jsPDF();
+        const imgProps= pdf.getImageProperties(imgData);
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+        pdf.save(`Daily_AI_Concise_Summary_${selectedDate}.pdf`);
+      });
+    }
+  };
 
-    const data: Array<{ name: string; value: number; color: string }> = []
+  const parseAiSummaryForChart = (summary: string | null): AiSummaryChartData | null => {
+    if (!summary) return null
+
+    const barData: Array<{ name: string; yes: number; no: number; }> = []
+    const individualBarData: { [key: string]: Array<{ name: string; value: number; color: string; }> } = {};
     const regex = /For "([^"]+)": (\d+) reports answered 'yes' and (\d+) reports answered 'no'/gi
     let match
-
-    const colors = ['#22c55e', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#10b981', '#d946ef', '#f97316', '#6366f1', '#be185d', '#0ea5e9'];
-    let colorIndex = 0;
 
     while ((match = regex.exec(summary)) !== null) {
       const question = match[1].replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       const yesCount = parseInt(match[2], 10);
       const noCount = parseInt(match[3], 10);
-
-      if (yesCount > 0) {
-        data.push({ name: `${question} (Yes)`, value: yesCount, color: colors[colorIndex % colors.length] });
-        colorIndex++;
-      }
-      if (noCount > 0) {
-        data.push({ name: `${question} (No)`, value: noCount, color: colors[colorIndex % colors.length] });
-        colorIndex++;
-      }
+      barData.push({ name: question, yes: yesCount, no: noCount });
+      individualBarData[question] = [
+        { name: 'Yes', value: yesCount, color: '#22c55e' },
+        { name: 'No', value: noCount, color: '#ef4444' },
+      ];
     }
-    return data;
+
+    if (barData.length === 0) return null;
+
+    const totalYes = barData.reduce((acc, cur) => acc + cur.yes, 0);
+    const totalNo = barData.reduce((acc, cur) => acc + cur.no, 0);
+
+    const pieData = [
+      { name: 'Yes', value: totalYes, color: '#22c55e' },
+      { name: 'No', value: totalNo, color: '#ef4444' },
+    ];
+
+    return { pieData, barData, individualBarData };
   };
 
   const statusPieData = useMemo(() => {
@@ -113,7 +143,7 @@ export default function DailyReportsPage() {
   const hasStatusData = statusPieDataFiltered.length > 0
 
   useEffect(() => {
-    setAiSummaryPieData(parseAiSummaryForChart(dailyAiSummary));
+    setAiSummaryChartData(parseAiSummaryForChart(dailyAiSummary));
   }, [dailyAiSummary])
 
   useEffect(() => {
@@ -601,51 +631,34 @@ export default function DailyReportsPage() {
             </div>
           )}
           {dailyAiSummary && selectedAnalysisType === 'summary' && (
-            <div className="bg-gray-50 rounded-lg p-4">
+            <div ref={summaryRef} className="bg-gray-50 rounded-lg p-4">
               <h4 className="text-md font-semibold text-gray-900 mb-2">Concise Summary:</h4>
               <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
                 {dailyAiSummary}
               </pre>
-              {aiSummaryPieData.length > 0 && (
+              {aiSummaryChartData && (
                 <div className="mt-6">
                   <h4 className="text-md font-semibold text-gray-900 mb-2">Summary Breakdown:</h4>
                   <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
-                    <StatusPieChart data={aiSummaryPieData} />
-                    <div className="space-y-4">
-                      {aiSummaryPieData.map((item) => (
-                        <div key={item.name} className="flex items-center justify-between rounded-lg border border-gray-100 p-4">
-                          <div className="flex items-center space-x-3">
-                            <span
-                              className="h-3 w-3 rounded-full"
-                              style={{ backgroundColor: item.color }}
-                            ></span>
-                            <span className="text-sm font-medium text-gray-700">{item.name}</span>
-                          </div>
-                          <span className="text-sm font-semibold text-gray-900">{item.value}</span>
-                        </div>
-                      ))}
-                    </div>
+                    <StatusPieChart data={aiSummaryChartData.pieData} />
+                    <SummaryTrendChart data={aiSummaryChartData.barData} />
+                  </div>
+                  <div className="mt-8 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {Object.entries(aiSummaryChartData.individualBarData).map(([question, data]) => (
+                      <div key={question} className="p-4 border rounded-lg">
+                        <h5 className="text-sm font-semibold text-gray-900 mb-2 text-center">{question}</h5>
+                        <SimpleBarChart data={data} />
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
               <button
-                onClick={() => {
-                  if (dailyAiSummary) {
-                    const blob = new Blob([dailyAiSummary], { type: 'text/plain' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `Daily_AI_Concise_Summary_${selectedDate}.txt`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                  }
-                }}
+                onClick={handleDownloadPdf}
                 className="w-full btn-secondary flex items-center justify-center space-x-2 mt-4"
               >
                 <Download className="h-4 w-4" />
-                <span>Download Concise AI Summary</span>
+                <span>Download Concise AI Summary as PDF</span>
               </button>
             </div>
           )}
