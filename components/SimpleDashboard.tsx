@@ -17,11 +17,97 @@ import {
   Settings,
   RefreshCw
 } from 'lucide-react'
-import { DataService, DashboardStats } from '@/lib/dataService'
+import { DataService, DashboardStats, ComplianceReport } from '@/lib/dataService'
+import { ReportsLineChart } from '@/components/charts/ReportsLineChart'
+
+interface ReportsTrendPoint {
+  day: string
+  submissions: number
+}
+
+const formatISODate = (date: Date) => date.toISOString().slice(0, 10)
+
+const utcDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric',
+  timeZone: 'UTC'
+})
+
+const normalizeDateKey = (value: any): string | null => {
+  if (!value) {
+    return null
+  }
+
+  if (typeof value === 'string') {
+    return value.slice(0, 10)
+  }
+
+  if (value instanceof Date) {
+    return formatISODate(value)
+  }
+
+  if (typeof value === 'object') {
+    if (typeof value.toDate === 'function') {
+      return formatISODate(value.toDate())
+    }
+
+    if (typeof value.seconds === 'number') {
+      return formatISODate(new Date(value.seconds * 1000))
+    }
+  }
+
+  return null
+}
+
+const buildReportsTrend = (
+  reports: ComplianceReport[],
+  startKey: string,
+  endKey: string
+): ReportsTrendPoint[] => {
+  if (!startKey || !endKey || startKey > endKey) {
+    return []
+  }
+
+  const startDate = new Date(`${startKey}T00:00:00Z`)
+  const endDate = new Date(`${endKey}T00:00:00Z`)
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return []
+  }
+
+  const dayKeys: string[] = []
+  const cursor = new Date(startDate)
+
+  while (cursor <= endDate) {
+    dayKeys.push(formatISODate(cursor))
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+
+  const counts = dayKeys.reduce<Record<string, number>>((acc, day) => {
+    acc[day] = 0
+    return acc
+  }, {})
+
+  reports.forEach(report => {
+    const key = normalizeDateKey(report.submittedAt ?? report.createdAt)
+    if (key && counts[key] !== undefined) {
+      counts[key] += 1
+    }
+  })
+
+  return dayKeys.map(day => ({
+    day: utcDateFormatter.format(new Date(`${day}T00:00:00Z`)),
+    submissions: counts[day]
+  }))
+}
 
 export default function SimpleDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [feederPoints, setFeederPoints] = useState<any[]>([])
+  const [allReports, setAllReports] = useState<ComplianceReport[]>([])
+  const [reportTrendData, setReportTrendData] = useState<ReportsTrendPoint[]>([])
+  const [rangeStart, setRangeStart] = useState('')
+  const [rangeEnd, setRangeEnd] = useState('')
   const [loading, setLoading] = useState(true)
   const [currentPage, setCurrentPage] = useState(1)
   const itemsPerPage = 5 // You can adjust this number
@@ -33,19 +119,39 @@ export default function SimpleDashboard() {
   const loadDashboardData = async () => {
     setLoading(true)
     try {
-      const [statsData, feederPointsData] = await Promise.all([
+      const [statsData, feederPointsData, complianceReports] = await Promise.all([
         DataService.getDashboardStats(),
-        DataService.getAllFeederPoints()
+        DataService.getAllFeederPoints(),
+        DataService.getAllComplianceReports()
       ])
 
       setStats(statsData)
       setFeederPoints(feederPointsData)
+      setAllReports(complianceReports)
+
+      if (!rangeStart || !rangeEnd) {
+        const defaultEnd = new Date()
+        const defaultStart = new Date(defaultEnd)
+        defaultStart.setDate(defaultEnd.getDate() - 6)
+        setRangeStart(formatISODate(defaultStart))
+        setRangeEnd(formatISODate(defaultEnd))
+      }
     } catch (error) {
       console.error('Error loading dashboard data:', error)
+      setAllReports([])
     } finally {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) {
+      setReportTrendData([])
+      return
+    }
+
+    setReportTrendData(buildReportsTrend(allReports, rangeStart, rangeEnd))
+  }, [allReports, rangeStart, rangeEnd])
 
   if (loading) {
     return (
@@ -114,6 +220,13 @@ export default function SimpleDashboard() {
     }
   ]
 
+  const totalReportsInRange = reportTrendData.reduce((total, day) => total + day.submissions, 0)
+  const invalidRange = rangeStart && rangeEnd && rangeStart > rangeEnd
+  const rangeLabel =
+    rangeStart && rangeEnd && !invalidRange
+      ? `${utcDateFormatter.format(new Date(`${rangeStart}T00:00:00Z`))} → ${utcDateFormatter.format(new Date(`${rangeEnd}T00:00:00Z`))}`
+      : undefined
+
   return (
     <div className="space-y-8 scrollable-content">
       {/* Hero Header */}
@@ -154,6 +267,59 @@ export default function SimpleDashboard() {
             <div className="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-blue-500 to-purple-500 w-full rounded-b-2xl"></div>
           </div>
         ))}
+      </div>
+
+      {/* Compliance Activity Trend */}
+      <div className="card">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+          <h2 className="text-2xl font-bold text-gray-900 flex items-center">
+            <TrendingUp className="h-6 w-6 mr-2 text-blue-600" />
+            Compliance Activity Trend
+          </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label htmlFor="rangeStart" className="text-sm font-medium text-gray-600">
+                From
+              </label>
+              <input
+                id="rangeStart"
+                type="date"
+                value={rangeStart}
+                max={rangeEnd || undefined}
+                onChange={event => setRangeStart(event.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="rangeEnd" className="text-sm font-medium text-gray-600">
+                To
+              </label>
+              <input
+                id="rangeEnd"
+                type="date"
+                value={rangeEnd}
+                min={rangeStart || undefined}
+                onChange={event => setRangeEnd(event.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+              />
+            </div>
+            <span className="text-sm text-gray-500 whitespace-nowrap">
+              {totalReportsInRange} {totalReportsInRange === 1 ? 'report' : 'reports'}
+            </span>
+          </div>
+        </div>
+        {rangeLabel && (
+          <p className="text-xs text-gray-500 mb-3">Showing activity for {rangeLabel}</p>
+        )}
+        {invalidRange && (
+          <p className="text-sm text-red-500">Start date must be before end date.</p>
+        )}
+        {!invalidRange && reportTrendData.length > 0 && (
+          <ReportsLineChart data={reportTrendData} />
+        )}
+        {!invalidRange && reportTrendData.length === 0 && (
+          <p className="text-sm text-gray-500">No compliance activity recorded for this date range.</p>
+        )}
       </div>
 
       {/* Feeder Points Overview */}
