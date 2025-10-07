@@ -65,6 +65,35 @@ export default function DailyReportsPage() {
   const [allImages, setAllImages] = useState<Array<{ url: string, title: string, type: 'answer' | 'attachment' }>>([])
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
 
+  const [aiSummaryPieData, setAiSummaryPieData] = useState<Array<{ name: string; value: number; color: string }>>([])
+
+  const parseAiSummaryForChart = (summary: string | null): Array<{ name: string; value: number; color: string }> => {
+    if (!summary) return []
+
+    const data: Array<{ name: string; value: number; color: string }> = []
+    const regex = /For "([^"]+)": (\d+) reports answered 'yes' and (\d+) reports answered 'no'/g
+    let match
+
+    const colors = ['#22c55e', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#10b981', '#d946ef', '#f97316', '#6366f1', '#be185d', '#0ea5e9'];
+    let colorIndex = 0;
+
+    while ((match = regex.exec(summary)) !== null) {
+      const question = match[1].replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      const yesCount = parseInt(match[2], 10);
+      const noCount = parseInt(match[3], 10);
+
+      if (yesCount > 0) {
+        data.push({ name: `${question} (Yes)`, value: yesCount, color: colors[colorIndex % colors.length] });
+        colorIndex++;
+      }
+      if (noCount > 0) {
+        data.push({ name: `${question} (No)`, value: noCount, color: colors[colorIndex % colors.length] });
+        colorIndex++;
+      }
+    }
+    return data;
+  };
+
   const statusPieData = useMemo(() => {
     if (!reportSummary) return []
 
@@ -82,6 +111,10 @@ export default function DailyReportsPage() {
   )
 
   const hasStatusData = statusPieDataFiltered.length > 0
+
+  useEffect(() => {
+    setAiSummaryPieData(parseAiSummaryForChart(dailyAiSummary));
+  }, [dailyAiSummary])
 
   useEffect(() => {
     if (selectedReport) {
@@ -543,7 +576,7 @@ export default function DailyReportsPage() {
           {dailyAiDetailedAnalysis && selectedAnalysisType === 'detailed' && (
             <div className="bg-gray-50 rounded-lg p-4 mb-4">
               <h4 className="text-md font-semibold text-gray-900 mb-2">Detailed Report:</h4>
-              <pre className="whitespace-pre-wrap text-sm text-gray-800 font-mono">
+              <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
                 {dailyAiDetailedAnalysis}
               </pre>
               <button
@@ -570,9 +603,31 @@ export default function DailyReportsPage() {
           {dailyAiSummary && selectedAnalysisType === 'summary' && (
             <div className="bg-gray-50 rounded-lg p-4">
               <h4 className="text-md font-semibold text-gray-900 mb-2">Concise Summary:</h4>
-              <pre className="whitespace-pre-wrap text-sm text-gray-800 font-mono">
+              <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
                 {dailyAiSummary}
               </pre>
+              {aiSummaryPieData.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-md font-semibold text-gray-900 mb-2">Summary Breakdown:</h4>
+                  <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
+                    <StatusPieChart data={aiSummaryPieData} />
+                    <div className="space-y-4">
+                      {aiSummaryPieData.map((item) => (
+                        <div key={item.name} className="flex items-center justify-between rounded-lg border border-gray-100 p-4">
+                          <div className="flex items-center space-x-3">
+                            <span
+                              className="h-3 w-3 rounded-full"
+                              style={{ backgroundColor: item.color }}
+                            ></span>
+                            <span className="text-sm font-medium text-gray-700">{item.name}</span>
+                          </div>
+                          <span className="text-sm font-semibold text-gray-900">{item.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
               <button
                 onClick={() => {
                   if (dailyAiSummary) {

@@ -36,9 +36,7 @@ export class AIService {
       // If no API key, use simulation
       if (!this.API_KEY) {
         console.log('🤖 No Gemini API key found, using simulation');
-        const simulated = this.simulateAnalysis(reportData);
-        console.log('DEBUG: Simulated Analysis Output:', simulated); // Log simulated output
-        return { detailed: simulated, summary: simulated };
+        return this.simulateAnalysis(reportData);
       }
 
       const detailedPrompt = this.buildDetailedPrompt(reportData);
@@ -59,9 +57,7 @@ export class AIService {
     } catch (error) {
       console.error('❌ Error calling Gemini API:', error);
       // Fallback to simulation
-      const simulated = this.simulateAnalysis(reportData);
-      console.log('DEBUG: Fallback simulated output:', simulated); // Log fallback simulated output
-      return { detailed: simulated, summary: simulated.substring(0, 500) + '...' };
+      return this.simulateAnalysis(reportData);
     }
   }
 
@@ -266,7 +262,7 @@ Provide a summary of the day's operations, approximately 300 words. This summary
   /**
    * Simulate AI analysis when API is not available
    */
-  private static simulateAnalysis(reportData: DailyReportData): string {
+  private static simulateAnalysis(reportData: DailyReportData): { detailed: string, summary: string } {
     const resolutionRate = reportData.performance.complaintResolutionRate;
     const totalReports = reportData.metrics.totalComplaints;
     const approvedReports = reportData.metrics.resolvedComplaints;
@@ -350,15 +346,15 @@ Recommendations:
 1. Implement targeted training for field teams on waste segregation protocols.
 2. Conduct surprise inspections at feeder points identified with segregation issues.
 3. Enhance monitoring mechanisms to identify and address non-compliance promptly.
+`;
 
-CONCISE SUMMARY:
-
-Daily Operational Summary for ${reportData.date} (300 words)
+    const conciseSummary = `
+Daily Operational Summary for ${reportData.date}
 
 Today's operations processed ${totalReports} compliance reports, with a ${resolutionRate}% approval rate. A primary challenge identified is inconsistent waste segregation, particularly at feeder points like ${mixedWasteFeederPoints.join(', ')}. This issue requires immediate attention to improve processing efficiency and environmental adherence. Recommendations include targeted training and enhanced monitoring. Overall, the system demonstrates capacity, but specific operational adjustments are needed to optimize waste management practices and ensure full compliance with environmental standards. The taskforce continues to monitor and adapt to daily operational challenges, striving for continuous improvement in urban waste management. Further efforts will focus on reinforcing best practices and leveraging technology for better oversight. This summary provides a high-level overview for ministerial review, highlighting key performance indicators and areas requiring strategic intervention to maintain and enhance public service delivery.
     `;
 
-    return detailedReport;
+    return { detailed: detailedReport, summary: conciseSummary };
   }
 
   /**
