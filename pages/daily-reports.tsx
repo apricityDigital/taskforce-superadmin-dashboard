@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import {
   FileText,
   Send,
@@ -36,10 +37,17 @@ interface ReportSummary {
   actionRequired: number;
 }
 
+const StatusPieChart = dynamic(() => import('@/components/charts/StatusPieChart').then(mod => mod.StatusPieChart), {
+  ssr: false,
+})
+
 export default function DailyReportsPage() {
   const { user } = useAuth()
   const [reports, setReports] = useState<ComplianceReport[]>([])
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
+  const [useCustomRange, setUseCustomRange] = useState(false)
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0])
+  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
   const [filterStatus, setFilterStatus] = useState<ComplianceReport['status'] | 'all'>('all') // 'all', 'pending', 'approved', 'rejected', 'requires_action'
   const [generatingAI, setGeneratingAI] = useState(false)
@@ -56,6 +64,24 @@ export default function DailyReportsPage() {
   const [showCollage, setShowCollage] = useState(false)
   const [allImages, setAllImages] = useState<Array<{ url: string, title: string, type: 'answer' | 'attachment' }>>([])
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
+
+  const statusPieData = useMemo(() => {
+    if (!reportSummary) return []
+
+    return [
+      { name: 'Pending', value: reportSummary.pending, color: '#f59e0b' },
+      { name: 'Approved', value: reportSummary.approved, color: '#22c55e' },
+      { name: 'Rejected', value: reportSummary.rejected, color: '#ef4444' },
+      { name: 'Action Required', value: reportSummary.actionRequired, color: '#f97316' },
+    ]
+  }, [reportSummary])
+
+  const statusPieDataFiltered = useMemo(
+    () => statusPieData.filter(item => item.value > 0),
+    [statusPieData]
+  )
+
+  const hasStatusData = statusPieDataFiltered.length > 0
 
   useEffect(() => {
     if (selectedReport) {
@@ -78,6 +104,11 @@ export default function DailyReportsPage() {
       console.log("All Compliance Reports (real-time):", allReports)
       let filteredReports = allReports.filter(report => {
         const reportDate = new Date(report.submittedAt.toDate()).toISOString().split('T')[0]
+        if (useCustomRange && startDate && endDate) {
+          const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
+          return reportDate >= rangeStart && reportDate <= rangeEnd
+        }
+
         return reportDate === selectedDate
       })
 
@@ -103,7 +134,14 @@ export default function DailyReportsPage() {
     })
 
     return () => unsubscribe()
-  }, [selectedDate, filterStatus]) // Add filterStatus to dependency array
+  }, [selectedDate, filterStatus, useCustomRange, startDate, endDate]) // Add filterStatus to dependency array
+
+  useEffect(() => {
+    if (!useCustomRange) {
+      setStartDate(selectedDate)
+      setEndDate(selectedDate)
+    }
+  }, [selectedDate, useCustomRange])
 
   // Keyboard navigation for image modal
   useEffect(() => {
@@ -224,6 +262,32 @@ export default function DailyReportsPage() {
     setShowCollage(false)
   }
 
+  const handleToggleCustomRange = () => {
+    if (useCustomRange) {
+      const fallbackDate = startDate || new Date().toISOString().split('T')[0]
+      setSelectedDate(fallbackDate)
+    } else {
+      setStartDate(selectedDate)
+      setEndDate(selectedDate)
+    }
+
+    setUseCustomRange(!useCustomRange)
+  }
+
+  const handleStartDateChange = (value: string) => {
+    setStartDate(value)
+    if (endDate && value > endDate) {
+      setEndDate(value)
+    }
+  }
+
+  const handleEndDateChange = (value: string) => {
+    setEndDate(value)
+    if (startDate && value < startDate) {
+      setStartDate(value)
+    }
+  }
+
   const handleUpdateStatus = async (status: ComplianceReport['status']) => {
     if (!selectedReport || !user) return
 
@@ -253,8 +317,14 @@ export default function DailyReportsPage() {
     setGeneratingAI(true)
     setSelectedAnalysisType(type)
     try {
+      let effectiveDateLabel = selectedDate
+      if (useCustomRange && startDate && endDate) {
+        const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
+        effectiveDateLabel = `${rangeStart} to ${rangeEnd}`
+      }
+
       const reportData: DailyReportData = {
-        date: selectedDate,
+        date: effectiveDateLabel,
         metrics: {
           totalUsers: 0, // This data is not available from compliance reports
           newRegistrations: 0, // This data is not available from compliance reports
@@ -336,13 +406,42 @@ export default function DailyReportsPage() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-4">
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <label className="flex items-center space-x-2 text-sm text-gray-600">
+              <input
+                type="checkbox"
+                checked={useCustomRange}
+                onChange={handleToggleCustomRange}
+                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>Custom Range</span>
+            </label>
+
+            {useCustomRange ? (
+              <div className="flex items-center space-x-2">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => handleStartDateChange(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                <span className="text-sm text-gray-500">to</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => handleEndDateChange(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+            ) : (
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            )}
+
             <div className="relative"> {/* Added wrapper div */}
               <select
                 value={filterStatus}
@@ -362,24 +461,61 @@ export default function DailyReportsPage() {
 
       {/* Report Summary */}
       {reportSummary && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="card p-4 text-center">
-            <h3 className="text-lg font-semibold text-gray-700">Total Reports</h3>
-            <p className="text-3xl font-bold text-blue-600">{reportSummary.total}</p>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="card p-4 text-center">
+              <h3 className="text-lg font-semibold text-gray-700">Total Reports</h3>
+              <p className="text-3xl font-bold text-blue-600">{reportSummary.total}</p>
+            </div>
+            <div className="card p-4 text-center">
+              <h3 className="text-lg font-semibold text-gray-700">Pending</h3>
+              <p className="text-3xl font-bold text-yellow-600">{reportSummary.pending}</p>
+            </div>
+            <div className="card p-4 text-center">
+              <h3 className="text-lg font-semibold text-gray-700">Approved</h3>
+              <p className="text-3xl font-bold text-green-600">{reportSummary.approved}</p>
+            </div>
+            <div className="card p-4 text-center">
+              <h3 className="text-lg font-semibold text-gray-700">Rejected</h3>
+              <p className="text-3xl font-bold text-red-600">{reportSummary.rejected}</p>
+            </div>
           </div>
-          <div className="card p-4 text-center">
-            <h3 className="text-lg font-semibold text-gray-700">Pending</h3>
-            <p className="text-3xl font-bold text-yellow-600">{reportSummary.pending}</p>
+
+          <div className="card p-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Report Status Distribution</h3>
+                <p className="text-sm text-gray-600">
+                  Breakdown of report statuses for the selected {useCustomRange ? 'date range' : 'date'}.
+                </p>
+              </div>
+            </div>
+
+            {hasStatusData ? (
+              <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
+                <StatusPieChart data={statusPieDataFiltered} />
+                <div className="space-y-4">
+                  {statusPieData.map((item) => (
+                    <div key={item.name} className="flex items-center justify-between rounded-lg border border-gray-100 p-4">
+                      <div className="flex items-center space-x-3">
+                        <span
+                          className="h-3 w-3 rounded-full"
+                          style={{ backgroundColor: item.color }}
+                        ></span>
+                        <span className="text-sm font-medium text-gray-700">{item.name}</span>
+                      </div>
+                      <span className="text-sm font-semibold text-gray-900">{item.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-6 text-sm text-gray-500">
+                No reports available for the selected {useCustomRange ? 'date range.' : 'date.'}
+              </p>
+            )}
           </div>
-          <div className="card p-4 text-center">
-            <h3 className="text-lg font-semibold text-gray-700">Approved</h3>
-            <p className="text-3xl font-bold text-green-600">{reportSummary.approved}</p>
-          </div>
-          <div className="card p-4 text-center">
-            <h3 className="text-lg font-semibold text-gray-700">Rejected</h3>
-            <p className="text-3xl font-bold text-red-600">{reportSummary.rejected}</p>
-          </div>
-        </div>
+        </>
       )}
 
       {/* Daily AI Analysis */}
