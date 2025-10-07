@@ -46,7 +46,6 @@ const StatusPieChart = dynamic(() => import('@/components/charts/StatusPieChart'
 })
 
 interface AiSummaryChartData {
-  pieData: Array<{ name: string; value: number; color: string; }>;
   barData: Array<{ name: string; yes: number; no: number; }>;
   individualBarData: { [key: string]: Array<{ name: string; value: number; color: string; }> };
 }
@@ -92,7 +91,7 @@ export default function DailyReportsPage() {
     }
   };
 
-  const parseAiSummaryForChart = (summary: string | null): AiSummaryChartData | null => {
+  const parseAiSummaryForBarCharts = (summary: string | null): AiSummaryChartData | null => {
     if (!summary) return null
 
     const barData: Array<{ name: string; yes: number; no: number; }> = []
@@ -113,16 +112,18 @@ export default function DailyReportsPage() {
 
     if (barData.length === 0) return null;
 
-    const totalYes = barData.reduce((acc, cur) => acc + cur.yes, 0);
-    const totalNo = barData.reduce((acc, cur) => acc + cur.no, 0);
-
-    const pieData = [
-      { name: 'Yes', value: totalYes, color: '#22c55e' },
-      { name: 'No', value: totalNo, color: '#ef4444' },
-    ];
-
-    return { pieData, barData, individualBarData };
+    return { barData, individualBarData };
   };
+
+  const summaryReportPieData = useMemo(() => {
+    if (!reportSummary) return []
+
+    return [
+      { name: 'Total', value: reportSummary.total, color: '#3b82f6' },
+      { name: 'Approved', value: reportSummary.approved, color: '#22c55e' },
+      { name: 'Pending', value: reportSummary.pending, color: '#f59e0b' },
+    ].filter(item => item.value > 0);
+  }, [reportSummary]);
 
   const statusPieData = useMemo(() => {
     if (!reportSummary) return []
@@ -143,7 +144,7 @@ export default function DailyReportsPage() {
   const hasStatusData = statusPieDataFiltered.length > 0
 
   useEffect(() => {
-    setAiSummaryChartData(parseAiSummaryForChart(dailyAiSummary));
+    setAiSummaryChartData(parseAiSummaryForBarCharts(dailyAiSummary));
   }, [dailyAiSummary])
 
   useEffect(() => {
@@ -636,11 +637,32 @@ export default function DailyReportsPage() {
               <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
                 {dailyAiSummary}
               </pre>
+              {reportSummary && summaryReportPieData.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-md font-semibold text-gray-900 mb-2">Report Status Breakdown:</h4>
+                  <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
+                    <StatusPieChart data={summaryReportPieData} />
+                    <div className="space-y-4">
+                      {summaryReportPieData.map((item) => (
+                        <div key={item.name} className="flex items-center justify-between rounded-lg border border-gray-100 p-4">
+                          <div className="flex items-center space-x-3">
+                            <span
+                              className="h-3 w-3 rounded-full"
+                              style={{ backgroundColor: item.color }}
+                            ></span>
+                            <span className="text-sm font-medium text-gray-700">{item.name}</span>
+                          </div>
+                          <span className="text-sm font-semibold text-gray-900">{item.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
               {aiSummaryChartData && (
                 <div className="mt-6">
-                  <h4 className="text-md font-semibold text-gray-900 mb-2">Summary Breakdown:</h4>
+                  <h4 className="text-md font-semibold text-gray-900 mb-2">AI Analysis Breakdown:</h4>
                   <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
-                    <StatusPieChart data={aiSummaryChartData.pieData} />
                     <SummaryTrendChart data={aiSummaryChartData.barData} />
                   </div>
                   <div className="mt-8 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -784,7 +806,7 @@ export default function DailyReportsPage() {
                             </p>
                             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                               {answer.photos.map((photoUrl, photoIndex) => (
-                                <div key={photoIndex} className="relative group">
+                                <div key={photoIndex} className="relative group" onClick={() => openImageModal(photoUrl)}>
                                   {imageLoadingStates[photoUrl] !== false && !imageErrorStates[photoUrl] && (
                                     <div className="absolute inset-0 bg-gray-200 rounded-md flex items-center justify-center z-10">
                                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
@@ -805,7 +827,6 @@ export default function DailyReportsPage() {
                                         className="w-full h-20 object-cover rounded-md cursor-pointer hover:opacity-90 transition-opacity"
                                         onLoad={() => handleImageLoad(photoUrl)}
                                         onError={() => handleImageError(photoUrl)}
-                                        onClick={() => openImageModal(photoUrl)}
                                       />
                                       <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all duration-200 rounded-md flex items-center justify-center">
                                         <ZoomIn className="h-4 w-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -832,7 +853,7 @@ export default function DailyReportsPage() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                     {selectedReport.attachments && selectedReport.attachments.length > 0 ? (
                       selectedReport.attachments.map(att => (
-                        <div key={att.id} className="relative group">
+                        <div key={att.id} className="relative group" onClick={() => openImageModal(att.url)}>
                           {att.type === 'photo' ? (
                             <>
                               {imageLoadingStates[att.url] !== false && !imageErrorStates[att.url] && (
@@ -856,7 +877,6 @@ export default function DailyReportsPage() {
                                     className="w-full h-32 object-cover rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
                                     onLoad={() => handleImageLoad(att.url)}
                                     onError={() => handleImageError(att.url)}
-                                    onClick={() => openImageModal(att.url)}
                                   />
                                   <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 rounded-lg flex items-center justify-center">
                                     <ZoomIn className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -1019,7 +1039,7 @@ export default function DailyReportsPage() {
                   <img
                     src={selectedImage || ''}
                     alt={allImages[currentImageIndex]?.title || 'Full size view'}
-                    className={`max-w-full max-h-full object-contain rounded-lg shadow-2xl ${selectedImage && imageLoadingStates[selectedImage] !== false ? 'opacity-0' : 'opacity-100'} transition-opacity duration-200`}
+                    className={`max-w-full max-h-full object-contain rounded-lg shadow-2xl`}
                     onLoad={() => selectedImage && handleImageLoad(selectedImage)}
                     onError={() => selectedImage && handleImageError(selectedImage)}
                     onClick={(e) => e.stopPropagation()}
