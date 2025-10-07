@@ -79,13 +79,28 @@ export default function DailyReportsPage() {
 
   const handleDownloadPdf = () => {
     if (summaryRef.current) {
-      html2canvas(summaryRef.current).then((canvas) => {
+      const input = summaryRef.current;
+      html2canvas(input, { scrollY: -window.scrollY }).then(canvas => {
         const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF();
-        const imgProps= pdf.getImageProperties(imgData);
+        const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
+        const ratio = canvasWidth / pdfWidth;
+        const imgHeight = canvasHeight / ratio;
+        let heightLeft = imgHeight;
+        let position = 0;
+
+        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+        heightLeft -= pdfHeight;
+
+        while (heightLeft > 0) {
+          position -= pdfHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+          heightLeft -= pdfHeight;
+        }
         pdf.save(`Daily_AI_Concise_Summary_${selectedDate}.pdf`);
       });
     }
