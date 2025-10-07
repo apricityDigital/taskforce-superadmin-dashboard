@@ -71,7 +71,7 @@ export default function DailyReportsPage() {
     if (!summary) return []
 
     const data: Array<{ name: string; value: number; color: string }> = []
-    const regex = /For "([^"]+)": (\d+) reports answered 'yes' and (\d+) reports answered 'no'/g
+    const regex = /For "([^"]+)": (\d+) reports answered 'yes' and (\d+) reports answered 'no'/gi
     let match
 
     const colors = ['#22c55e', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#10b981', '#d946ef', '#f97316', '#6366f1', '#be185d', '#0ea5e9'];

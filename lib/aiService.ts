@@ -42,7 +42,7 @@ export class AIService {
       const detailedPrompt = this.buildDetailedPrompt(reportData);
       const concisePrompt = this.buildConcisePrompt(reportData);
 
-      const model = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
 
       const [detailedResult, summaryResult] = await Promise.all([
         model.generateContent(detailedPrompt),
@@ -349,6 +349,8 @@ Recommendations:
 `;
 
     const conciseSummary = `
+${numericalSummary}
+
 Daily Operational Summary for ${reportData.date}
 
 Today's operations processed ${totalReports} compliance reports, with a ${resolutionRate}% approval rate. A primary challenge identified is inconsistent waste segregation, particularly at feeder points like ${mixedWasteFeederPoints.join(', ')}. This issue requires immediate attention to improve processing efficiency and environmental adherence. Recommendations include targeted training and enhanced monitoring. Overall, the system demonstrates capacity, but specific operational adjustments are needed to optimize waste management practices and ensure full compliance with environmental standards. The taskforce continues to monitor and adapt to daily operational challenges, striving for continuous improvement in urban waste management. Further efforts will focus on reinforcing best practices and leveraging technology for better oversight. This summary provides a high-level overview for ministerial review, highlighting key performance indicators and areas requiring strategic intervention to maintain and enhance public service delivery.
