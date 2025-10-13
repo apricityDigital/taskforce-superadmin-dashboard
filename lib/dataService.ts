@@ -128,6 +128,31 @@ export interface Team {
   members: User[];
 }
 
+export interface EmployeePerformance {
+  userId: string;
+  name: string;
+  email: string;
+  role: string;
+  totalReports: number;
+  approvedReports: number;
+  rejectedReports: number;
+  pendingReports: number;
+  approvalRate: number;
+  lastReportAt: Date | null;
+}
+
+export interface FeederPointSummary {
+  key: string;
+  feederPointId?: string;
+  feederPointName: string;
+  totalReports: number;
+  approvedReports: number;
+  rejectedReports: number;
+  pendingReports: number;
+  lastReportAt: Date | null;
+  reports: ComplianceReport[];
+}
+
 export interface FeederPoint {
   id: string;
   name: string;
@@ -144,6 +169,23 @@ export interface FeederPoint {
 }
 
 export class DataService {
+  private static coerceDate(value: any): Date | null {
+    if (!value) {
+      return null;
+    }
+    if (value instanceof Date) {
+      return value;
+    }
+    if (typeof value.toDate === 'function') {
+      return value.toDate();
+    }
+    if (typeof value === 'string') {
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+    return null;
+  }
+
   // Get dashboard statistics
   static async getDashboardStats(): Promise<DashboardStats> {
     try {
@@ -219,6 +261,328 @@ export class DataService {
         activeCommissioners: 0
       };
     }
+  }
+
+  static async getEmployeePerformance(options?: {
+    role?: string;
+    startDate?: Date;
+    endDate?: Date;
+    includeInactive?: boolean;
+  }): Promise<EmployeePerformance[]> {
+    const roleFilter = options?.role;
+    const startDate = options?.startDate ? new Date(options.startDate) : null;
+    const endDate = options?.endDate ? new Date(options.endDate) : null;
+    const includeInactive = options?.includeInactive ?? false;
+
+    if (startDate && endDate && startDate > endDate) {
+      return [];
+    }
+
+    try {
+      const [usersSnapshot, reportsSnapshot] = await Promise.all([
+        getDocs(collection(db, 'approvedUsers')),
+        getDocs(collection(db, 'complianceReports'))
+      ]);
+
+      const users = usersSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as User));
+
+      const performanceByUser = new Map<string, EmployeePerformance>();
+      const userEmailIndex = new Map<string, string>();
+      const userNameIndex = new Map<string, string>();
+
+      users.forEach(user => {
+        if (roleFilter && user.role !== roleFilter) {
+          return;
+        }
+        if (!includeInactive && user.isActive === false) {
+          return;
+        }
+        performanceByUser.set(user.id, {
+          userId: user.id,
+          name: user.name || 'Unknown User',
+          email: user.email || 'N/A',
+          role: user.role || 'user',
+          totalReports: 0,
+          approvedReports: 0,
+          rejectedReports: 0,
+          pendingReports: 0,
+          approvalRate: 0,
+          lastReportAt: null
+        });
+
+        if (user.email) {
+          userEmailIndex.set(user.email.toLowerCase(), user.id);
+        }
+        if (user.name) {
+          userNameIndex.set(user.name.toLowerCase(), user.id);
+        }
+      });
+
+      reportsSnapshot.docs.forEach(reportDoc => {
+        const report = reportDoc.data() as ComplianceReport;
+        const coalescedUserId = typeof report.userId === 'string' ? report.userId.trim() : report.userId || undefined;
+        let stats = coalescedUserId ? performanceByUser.get(coalescedUserId) : undefined;
+
+        if (!stats && report.submittedBy) {
+          const emailKey = String(report.submittedBy).trim().toLowerCase();
+          const emailMatch = userEmailIndex.get(emailKey);
+          if (emailMatch) {
+            stats = performanceByUser.get(emailMatch);
+          }
+        }
+
+        if (!stats && report.userName) {
+          const nameKey = String(report.userName).trim().toLowerCase();
+          const nameMatch = userNameIndex.get(nameKey);
+          if (nameMatch) {
+            stats = performanceByUser.get(nameMatch);
+          }
+        }
+
+        if (!stats) {
+          return;
+        }
+
+        const reportDate =
+          DataService.coerceDate(report.submittedAt) ||
+          DataService.coerceDate(report.updatedAt) ||
+          DataService.coerceDate(report.createdAt) ||
+          DataService.coerceDate(report.tripDate);
+
+        if (startDate && reportDate && reportDate < startDate) {
+          return;
+        }
+        if (endDate && reportDate && reportDate > endDate) {
+          return;
+        }
+
+        if (!reportDate && (startDate || endDate)) {
+          return;
+        }
+
+        stats.totalReports += 1;
+
+        if (report.status === 'approved') {
+          stats.approvedReports += 1;
+        } else if (report.status === 'rejected') {
+          stats.rejectedReports += 1;
+        } else {
+          stats.pendingReports += 1;
+        }
+
+        if (reportDate && (!stats.lastReportAt || reportDate > stats.lastReportAt)) {
+          stats.lastReportAt = reportDate;
+        }
+      });
+
+      return Array.from(performanceByUser.values()).map(performance => ({
+        ...performance,
+        approvalRate: performance.totalReports
+          ? performance.approvedReports / performance.totalReports
+          : 0
+      }));
+    } catch (error) {
+      console.error('Error fetching employee performance:', error);
+      return [];
+    }
+  }
+
+  static async getEmployeeReports(
+    userId: string,
+    options?: { startDate?: Date; endDate?: Date; userEmail?: string; userName?: string }
+  ): Promise<ComplianceReport[]> {
+    const startDate = options?.startDate ? new Date(options.startDate) : null;
+    const endDate = options?.endDate ? new Date(options.endDate) : null;
+
+    const reportsMap = new Map<string, ComplianceReport>();
+
+    const collectReports = (snapshot: any) => {
+      snapshot.docs.forEach((docSnapshot: any) => {
+        const data = docSnapshot.data();
+        const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+
+        const reportDate =
+          DataService.coerceDate(report.submittedAt) ||
+          DataService.coerceDate(report.updatedAt) ||
+          DataService.coerceDate(report.createdAt) ||
+          DataService.coerceDate(report.tripDate);
+
+        if (startDate && reportDate && reportDate < startDate) {
+          return;
+        }
+        if (endDate && reportDate && reportDate > endDate) {
+          return;
+        }
+        if (!reportDate && (startDate || endDate)) {
+          return;
+        }
+
+        reportsMap.set(report.id, report);
+      });
+    };
+
+    if (userId) {
+      const q = query(collection(db, 'complianceReports'), where('userId', '==', userId));
+      const snapshot = await getDocs(q);
+      collectReports(snapshot);
+    }
+
+    if (reportsMap.size === 0 && options?.userEmail) {
+      const emailQuery = query(
+        collection(db, 'complianceReports'),
+        where('submittedBy', '==', options.userEmail)
+      );
+      const snapshot = await getDocs(emailQuery);
+      collectReports(snapshot);
+    }
+
+    if (reportsMap.size === 0 && options?.userName) {
+      const nameQuery = query(
+        collection(db, 'complianceReports'),
+        where('userName', '==', options.userName)
+      );
+      const snapshot = await getDocs(nameQuery);
+      collectReports(snapshot);
+    }
+
+    if (reportsMap.size === 0) {
+      const snapshot = await getDocs(collection(db, 'complianceReports'));
+      snapshot.docs.forEach(docSnapshot => {
+        const data = docSnapshot.data() as ComplianceReport;
+
+        const matchesUser =
+          data.userId === userId ||
+          (options?.userEmail && data.submittedBy === options.userEmail) ||
+          (options?.userName && data.userName === options.userName);
+
+        if (!matchesUser) {
+          return;
+        }
+
+        const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+
+        const reportDate =
+          DataService.coerceDate(report.submittedAt) ||
+          DataService.coerceDate(report.updatedAt) ||
+          DataService.coerceDate(report.createdAt) ||
+          DataService.coerceDate(report.tripDate);
+
+        if (startDate && reportDate && reportDate < startDate) {
+          return;
+        }
+        if (endDate && reportDate && reportDate > endDate) {
+          return;
+        }
+        if (!reportDate && (startDate || endDate)) {
+          return;
+        }
+
+        reportsMap.set(report.id, report);
+      });
+    }
+
+    const reports = Array.from(reportsMap.values()).sort((a, b) => {
+      const aDate =
+        DataService.coerceDate(a.submittedAt) ||
+        DataService.coerceDate(a.updatedAt) ||
+        DataService.coerceDate(a.createdAt);
+      const bDate =
+        DataService.coerceDate(b.submittedAt) ||
+        DataService.coerceDate(b.updatedAt) ||
+        DataService.coerceDate(b.createdAt);
+
+      const aTime = aDate ? aDate.getTime() : 0;
+      const bTime = bDate ? bDate.getTime() : 0;
+      return bTime - aTime;
+    });
+
+    return reports;
+  }
+
+  static async getFeederPointSummaries(options?: {
+    startDate?: Date;
+    endDate?: Date;
+  }): Promise<FeederPointSummary[]> {
+    const startDate = options?.startDate ? new Date(options.startDate) : null;
+    const endDate = options?.endDate ? new Date(options.endDate) : null;
+
+    const snapshot = await getDocs(collection(db, 'complianceReports'));
+
+    const summaries = new Map<string, FeederPointSummary>();
+
+    snapshot.docs.forEach(docSnapshot => {
+      const data = docSnapshot.data() as ComplianceReport;
+      const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+
+      const reportDate =
+        DataService.coerceDate(report.submittedAt) ||
+        DataService.coerceDate(report.updatedAt) ||
+        DataService.coerceDate(report.createdAt) ||
+        DataService.coerceDate(report.tripDate);
+
+      if (startDate && reportDate && reportDate < startDate) {
+        return;
+      }
+      if (endDate && reportDate && reportDate > endDate) {
+        return;
+      }
+      if (!reportDate && (startDate || endDate)) {
+        return;
+      }
+
+      const key = report.feederPointId || report.feederPointName || 'unspecified';
+      if (!summaries.has(key)) {
+        summaries.set(key, {
+          key,
+          feederPointId: report.feederPointId,
+          feederPointName: report.feederPointName || 'Unspecified Feeder Point',
+          totalReports: 0,
+          approvedReports: 0,
+          rejectedReports: 0,
+          pendingReports: 0,
+          lastReportAt: null,
+          reports: []
+        });
+      }
+
+      const summary = summaries.get(key)!;
+      summary.totalReports += 1;
+      summary.reports.push(report);
+
+      if (report.status === 'approved') {
+        summary.approvedReports += 1;
+      } else if (report.status === 'rejected') {
+        summary.rejectedReports += 1;
+      } else {
+        summary.pendingReports += 1;
+      }
+
+      if (reportDate && (!summary.lastReportAt || reportDate > summary.lastReportAt)) {
+        summary.lastReportAt = reportDate;
+      }
+    });
+
+    const results = Array.from(summaries.values()).map(summary => {
+      summary.reports.sort((a, b) => {
+        const aDate =
+          DataService.coerceDate(a.submittedAt) ||
+          DataService.coerceDate(a.updatedAt) ||
+          DataService.coerceDate(a.createdAt);
+        const bDate =
+          DataService.coerceDate(b.submittedAt) ||
+          DataService.coerceDate(b.updatedAt) ||
+          DataService.coerceDate(b.createdAt);
+        const aTime = aDate ? aDate.getTime() : 0;
+        const bTime = bDate ? bDate.getTime() : 0;
+        return bTime - aTime;
+      });
+      return summary;
+    });
+
+    return results.sort((a, b) => b.totalReports - a.totalReports);
   }
 
   // Get all users

@@ -13,7 +13,8 @@ import {
   Menu,
   X,
   Bell,
-  FileText
+  FileText,
+  BarChart3
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 
@@ -27,6 +28,7 @@ const navigation = [
   { name: 'Access Requests', href: '/access-requests', icon: UserCheck },
   { name: 'Feeder Points', href: '/feeder-points', icon: Activity },
   { name: 'Daily Reports', href: '/daily-reports', icon: FileText },
+  { name: 'Employee Tracker', href: '/employee-tracker', icon: BarChart3 },
   { name: 'Complaints', href: '/complaints', icon: MessageSquare },
   { name: 'Settings', href: '/settings', icon: Settings },
 ]

@@ -2,7 +2,6 @@
 // This service handles AI analysis of daily reports
 
 import { ComplianceReport } from './dataService';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export interface DailyReportData {
   date: string;
@@ -23,39 +22,28 @@ export interface DailyReportData {
 }
 
 export class AIService {
-  private static readonly API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || '';
-  private static genAI = new GoogleGenerativeAI(this.API_KEY);
 
   /**
-   * Generate AI analysis using Gemini API
+   * Generate AI analysis by calling the server-side API route.
    */
   static async generateAnalysis(reportData: DailyReportData): Promise<{ detailed: string; summary: string }> {
     try {
-      console.log('DEBUG: AIService.API_KEY:', this.API_KEY ? 'Set' : 'Not Set'); // Log API key status
+      const response = await fetch('/api/generate-summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(reportData),
+      });
 
-      // If no API key, use simulation
-      if (!this.API_KEY) {
-        console.log('🤖 No Gemini API key found, using simulation');
-        return this.simulateAnalysis(reportData);
+      if (!response.ok) {
+        throw new Error(`API call failed with status: ${response.status}`);
       }
 
-      const detailedPrompt = this.buildDetailedPrompt(reportData);
-      const concisePrompt = this.buildConcisePrompt(reportData);
-
-      const model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
-
-      const [detailedResult, summaryResult] = await Promise.all([
-        model.generateContent(detailedPrompt),
-        model.generateContent(concisePrompt)
-      ]);
-
-      const detailed = detailedResult.response.text();
-      const summary = summaryResult.response.text();
-
-      return { detailed, summary };
+      return await response.json();
 
     } catch (error) {
-      console.error('❌ Error calling Gemini API:', error);
+      console.error('❌ Error calling /api/generate-summary:', error);
       // Fallback to simulation
       return this.simulateAnalysis(reportData);
     }
@@ -153,7 +141,7 @@ END OF REPORT
   /**
    * Build analysis prompt for AI
    */
-  private static aggregateQuestionAnswers(reports: ComplianceReport[]): string {
+  public static aggregateQuestionAnswers(reports: ComplianceReport[]): string {
     const questionDetails = new Map<string, Map<string, { count: number; reportIds: string[]; notes: string[] }>>();
 
     reports.forEach(report => {
@@ -203,7 +191,7 @@ END OF REPORT
     return aggregatedContent;
   }
 
-  private static buildDetailedPrompt(reportData: DailyReportData): string {
+  public static buildDetailedPrompt(reportData: DailyReportData): string {
     let rawReportsContent = '';
     if (reportData.rawReports && reportData.rawReports.length > 0) {
       rawReportsContent = '\n\nRaw Reports Data (for detailed analysis): For specific examples and context, refer to these individual reports:\n';
@@ -240,7 +228,7 @@ Provide a comprehensive analysis of the day's operations. **Ignore any word limi
     `;
   }
 
-  private static buildConcisePrompt(reportData: DailyReportData): string {
+  public static buildConcisePrompt(reportData: DailyReportData): string {
     const aggregatedAnswers = this.aggregateQuestionAnswers(reportData.rawReports);
 
     return `
@@ -262,7 +250,7 @@ Provide a summary of the day's operations, approximately 300 words. This summary
   /**
    * Simulate AI analysis when API is not available
    */
-  private static simulateAnalysis(reportData: DailyReportData): { detailed: string, summary: string } {
+  public static simulateAnalysis(reportData: DailyReportData): { detailed: string, summary: string } {
     const resolutionRate = reportData.performance.complaintResolutionRate;
     const totalReports = reportData.metrics.totalComplaints;
     const approvedReports = reportData.metrics.resolvedComplaints;
@@ -362,7 +350,7 @@ Today's operations processed ${totalReports} compliance reports, with a ${resolu
   /**
    * Generate trend analysis
    */
-  private static generateTrendAnalysis(reportData: DailyReportData): string {
+  public static generateTrendAnalysis(reportData: DailyReportData): string {
     const trends = [];
     
     // Example: Analyze waste segregation trend
@@ -402,7 +390,7 @@ Today's operations processed ${totalReports} compliance reports, with a ${resolu
   /**
    * Generate recommendations
    */
-  private static generateRecommendations(reportData: DailyReportData): string {
+  public static generateRecommendations(reportData: DailyReportData): string {
     const recommendations = [];
 
     // Example: Recommendations based on waste segregation

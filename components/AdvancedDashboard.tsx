@@ -156,7 +156,7 @@ export default function AdvancedDashboard() {
   const [loading, setLoading] = useState(true)
   const [systemHealth, setSystemHealth] = useState({
     cpu: 85,
-    memory: 72,
+    memory: 52,
     storage: 45,
     network: 98
   })
