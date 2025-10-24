@@ -6,7 +6,6 @@ import {
   Users,
   UserCheck,
   MessageSquare,
-  Shield,
   Activity,
   Settings,
   LogOut,
@@ -78,10 +77,13 @@ export default function Layout({ children }: LayoutProps) {
           </button>
 
           <div className="flex-1 px-4 sm:px-6 flex justify-between items-center">
-            <div className="flex-1 min-w-0">
-              <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 truncate">
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-2xl font-semibold text-gray-900 truncate">
                 Taskforce Command Center
               </h1>
+              <p className="hidden sm:block text-xs text-gray-500">
+                Apricity Digital Labs · Operational Oversight
+              </p>
             </div>
 
             <div className="ml-4 flex items-center space-x-2 sm:space-x-4">
@@ -108,6 +110,14 @@ export default function Layout({ children }: LayoutProps) {
             </div>
           </div>
         </main>
+        <footer className="bg-white border-t border-gray-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row items-center justify-between text-sm text-gray-500">
+            <span>
+              Powered by <span className="font-semibold text-gray-700">Apricity Digital Labs</span>
+            </span>
+            <span className="mt-2 sm:mt-0">© {new Date().getFullYear()} All rights reserved.</span>
+          </div>
+        </footer>
       </div>
     </div>
   )
@@ -117,13 +127,11 @@ function SidebarContent({ currentPath }: { currentPath: string }) {
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-white border-r border-gray-200">
       <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto">
-        <div className="flex items-center flex-shrink-0 px-4">
-          <div className="h-8 w-8 bg-primary-600 rounded-lg flex items-center justify-center">
-            <Shield className="h-5 w-5 text-white" />
-          </div>
-          <span className="ml-2 text-xl font-semibold text-gray-900">SuperAdmin</span>
+        <div className="px-6">
+          {/* <p className="text-xs font-semibold uppercase tracking-[0.4em] text-amber-500">Apricity Digital Labs</p> */}
+          <p className="text-lg font-semibold text-gray-900">Taskforce SuperAdmin</p>
         </div>
-        
+
         <nav className="mt-8 flex-1 px-2 space-y-1">
           {navigation.map((item) => {
             const isActive = currentPath === item.href
@@ -141,6 +149,23 @@ function SidebarContent({ currentPath }: { currentPath: string }) {
             )
           })}
         </nav>
+      </div>
+
+      <div className="flex-shrink-0 px-4 py-6 border-t border-gray-200">
+        <div className="rounded-2xl bg-gray-50 p-4 text-center shadow-sm">
+          <img
+            src="/apricity-logo.svg"
+            alt="Apricity Digital Labs logo"
+            className="mx-auto h-16 w-auto"
+            draggable={false}
+          />
+          <p className="mt-3 text-xs uppercase tracking-[0.3em] text-amber-500 font-semibold">
+            Apricity Digital Labs
+          </p>
+          <p className="mt-1 text-[11px] text-gray-500">
+            Powering intelligent governance
+          </p>
+        </div>
       </div>
     </div>
   )

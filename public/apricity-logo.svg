@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="180" viewBox="0 0 256 180">
+  <defs>
+    <linearGradient id="a" x1="50%" x2="50%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#f6b742"/>
+      <stop offset="50%" stop-color="#f7a72f"/>
+      <stop offset="100%" stop-color="#e7822f"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" fill-rule="evenodd">
+    <path fill="url(#a)" d="M128 0 6 126.4c-2.6 2.7-2.5 7 .2 9.6a6.6 6.6 0 0 0 4.5 1.8h62.8c2.1 0 4-.9 5.4-2.4l48.7-52.2a4.6 4.6 0 0 1 6.8 0l48.7 52.2a7.6 7.6 0 0 0 5.5 2.4h62.8c3.6 0 6.5-2.8 6.5-6.3a6 6 0 0 0-1.8-4.4L128 0Z"/>
+    <g fill="#f6b742" font-family="Montserrat, Helvetica, Arial, sans-serif" font-size="32" font-weight="700" letter-spacing="4.5">
+      <text transform="translate(8 148)">APRICITY</text>
+    </g>
+    <g fill="#9ca3af" font-family="Montserrat, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" letter-spacing="3.5">
+      <text transform="translate(8 148)"><tspan x="28" y="26">DIGITAL LABS</tspan></text>
+    </g>
+  </g>
+</svg>
