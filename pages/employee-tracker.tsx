@@ -80,6 +80,15 @@ const formatQuestionLabel = (value: string) => {
 }
 
 const UNSPECIFIED_TRIP_VALUE = '__unspecified'
+const isUnspecifiedTripNumber = (value: unknown): boolean => {
+  if (value === undefined || value === null) {
+    return true
+  }
+  if (typeof value === 'string') {
+    return value.trim() === ''
+  }
+  return false
+}
 const isSameDay = (first: Date, second: Date) => {
   return (
     first.getFullYear() === second.getFullYear() &&
@@ -103,6 +112,18 @@ const isImageUrl = (value: string | null | undefined) => {
   } catch {
     return Array.from(IMAGE_EXTENSIONS).some(ext => lower.endsWith(ext))
   }
+}
+
+type FeederPerformanceInsight = {
+  key: string
+  feederPointName: string
+  totalReports: number
+  approvedReports: number
+  rejectedReports: number
+  pendingReports: number
+  requiresAction: number
+  approvalRate: number
+  lastReportAt: Date | null
 }
 
 export default function EmployeeTrackerPage() {
@@ -232,7 +253,13 @@ export default function EmployeeTrackerPage() {
     }
   }, [selectedReport])
 
-  const feederPerformanceInsights = useMemo(() => {
+  const feederPerformanceInsights = useMemo<{
+    best: FeederPerformanceInsight | null
+    worst: FeederPerformanceInsight | null
+    hasData: boolean
+    onlyOne: boolean
+    mode: typeof bestWorstMode
+  }>(() => {
     if (feederSummaries.length === 0) {
       return { best: null, worst: null, hasData: false, onlyOne: false, mode: bestWorstMode }
     }
@@ -313,7 +340,7 @@ export default function EmployeeTrackerPage() {
       return b.metrics.totalReports - a.metrics.totalReports
     })
 
-    const mapToInsight = (entry: typeof scored[number]) => ({
+    const mapToInsight = (entry: typeof scored[number]): FeederPerformanceInsight => ({
       key: entry.key,
       feederPointName: entry.feederPointName,
       ...entry.metrics
@@ -603,11 +630,10 @@ export default function EmployeeTrackerPage() {
     let hasUnspecified = false
 
     selectedFeederSummary.reports.forEach(report => {
-      const value = report.tripNumber
-      if (value === undefined || value === null || value === '') {
+      if (isUnspecifiedTripNumber(report.tripNumber)) {
         hasUnspecified = true
       } else {
-        numericTrips.add(String(value))
+        numericTrips.add(String(report.tripNumber))
       }
     })
 
@@ -635,9 +661,7 @@ export default function EmployeeTrackerPage() {
       return selectedFeederSummary.reports
     }
     if (tripFilter === UNSPECIFIED_TRIP_VALUE) {
-      return selectedFeederSummary.reports.filter(
-        report => report.tripNumber === undefined || report.tripNumber === null || report.tripNumber === ''
-      )
+      return selectedFeederSummary.reports.filter(report => isUnspecifiedTripNumber(report.tripNumber))
     }
     return selectedFeederSummary.reports.filter(report => String(report.tripNumber) === tripFilter)
   }, [selectedFeederSummary, tripFilter])

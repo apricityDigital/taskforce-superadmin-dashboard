@@ -73,6 +73,7 @@ export interface ComplianceAnswer {
   answer: 'yes' | 'no' | string;
   photos?: string[]; // Array of photo URLs
   notes?: string;
+  description?: string;
 }
 
 export interface ComplianceReportAttachment {
@@ -401,8 +402,9 @@ export class DataService {
 
     const collectReports = (snapshot: any) => {
       snapshot.docs.forEach((docSnapshot: any) => {
-        const data = docSnapshot.data();
-        const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+        const data = docSnapshot.data() as ComplianceReport;
+        const { id: _existingId, ...reportData } = data;
+        const report: ComplianceReport = { id: docSnapshot.id, ...reportData };
 
         const reportDate =
           DataService.coerceDate(report.submittedAt) ||
@@ -452,6 +454,7 @@ export class DataService {
       const snapshot = await getDocs(collection(db, 'complianceReports'));
       snapshot.docs.forEach(docSnapshot => {
         const data = docSnapshot.data() as ComplianceReport;
+        const { id: _existingId, ...reportData } = data;
 
         const matchesUser =
           data.userId === userId ||
@@ -462,7 +465,7 @@ export class DataService {
           return;
         }
 
-        const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+        const report: ComplianceReport = { id: docSnapshot.id, ...reportData };
 
         const reportDate =
           DataService.coerceDate(report.submittedAt) ||
@@ -515,7 +518,8 @@ export class DataService {
 
     snapshot.docs.forEach(docSnapshot => {
       const data = docSnapshot.data() as ComplianceReport;
-      const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+      const { id: _existingId, ...reportData } = data;
+      const report: ComplianceReport = { id: docSnapshot.id, ...reportData };
 
       const reportDate =
         DataService.coerceDate(report.submittedAt) ||
