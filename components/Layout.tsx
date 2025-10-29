@@ -129,7 +129,7 @@ function SidebarContent({ currentPath }: { currentPath: string }) {
       <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto">
         <div className="px-6">
           {/* <p className="text-xs font-semibold uppercase tracking-[0.4em] text-amber-500">Apricity Digital Labs</p> */}
-          <p className="text-lg font-semibold text-gray-900">Taskforce SuperAdmin</p>
+          <p className="text-lg font-semibold text-gray-900">Taskforce SuperAdmin</p>   
         </div>
 
         <nav className="mt-8 flex-1 px-2 space-y-1">
@@ -154,16 +154,16 @@ function SidebarContent({ currentPath }: { currentPath: string }) {
       <div className="flex-shrink-0 px-4 py-6 border-t border-gray-200">
         <div className="rounded-2xl bg-gray-50 p-4 text-center shadow-sm">
           <img
-            src="/apricity-logo.svg"
+            src="/Logo_Apricity.png"
             alt="Apricity Digital Labs logo"
             className="mx-auto h-16 w-auto"
             draggable={false}
           />
-          <p className="mt-3 text-xs uppercase tracking-[0.3em] text-amber-500 font-semibold">
-            Apricity Digital Labs
-          </p>
-          <p className="mt-1 text-[11px] text-gray-500">
-            Powering intelligent governance
+          {/* <p className="mt-3 text-xs uppercase tracking-[0.3em] font-semibold">
+           Apricity Digital Labs
+          </p> */}
+          <p className="mt-3 text-xs uppercase tracking-[0.3em] font-semibold text-gray-700">
+             Apricity Digital Labs
           </p>
         </div>
       </div>
