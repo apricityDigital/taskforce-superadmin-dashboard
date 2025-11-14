@@ -3,7 +3,7 @@
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts'
 
 interface QuestionPieChartProps {
-  data: Array<{ name: string; value: number; color: string }>
+  data: Array<{ label: string; value: number; color: string }>
 }
 
 export function QuestionPieChart({ data }: QuestionPieChartProps) {
@@ -22,7 +22,7 @@ export function QuestionPieChart({ data }: QuestionPieChartProps) {
           <Pie
             data={data}
             dataKey="value"
-            nameKey="name"
+            nameKey="label"
             innerRadius={35}
             outerRadius={55}
             paddingAngle={2}
