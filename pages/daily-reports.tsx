@@ -36,7 +36,7 @@ import {
   Award
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { DataService, ComplianceReport } from '@/lib/dataService'
+import { DataService, ComplianceReport, RejectionAnalysisResult } from '@/lib/dataService'
 import { AIService, DailyReportData } from '@/lib/aiService'
 import { useAuth } from '@/contexts/AuthContext'
 import { SimpleBarChart } from '@/components/charts/SimpleBarChart'
@@ -466,6 +466,7 @@ export default function DailyReportsPage() {
   const [selectedReport, setSelectedReport] = useState<ComplianceReport | null>(null)
   const [adminNotes, setAdminNotes] = useState('')
   const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [analyzingRejection, setAnalyzingRejection] = useState(false)
   const [reportSummary, setReportSummary] = useState<ReportSummary | null>(null)
   const [dailyAiDetailedAnalysis, setDailyAiDetailedAnalysis] = useState<string | null>(null)
   const [dailyAiSummary, setDailyAiSummary] = useState<string | null>(null)
@@ -870,21 +871,32 @@ export default function DailyReportsPage() {
     if (!selectedReport || !user) return
 
     setUpdatingStatus(true)
+    let rejectionAnalysis: RejectionAnalysisResult | undefined
     try {
+      if (status === 'rejected') {
+        setAnalyzingRejection(true)
+        rejectionAnalysis = await AIService.analyzeRejectedReport(selectedReport, adminNotes)
+      }
       await DataService.updateComplianceReportStatus(
         selectedReport.id,
         status,
         adminNotes,
-        user.name
+        user.name,
+        rejectionAnalysis
       )
 
-      alert(`Report ${status} successfully`)
+      if (rejectionAnalysis) {
+        alert(`Report rejected. AI reason: ${rejectionAnalysis.reason}`)
+      } else {
+        alert(`Report ${status} successfully`)
+      }
       setSelectedReport(null) // Close modal
       setAdminNotes('')
     } catch (error) {
       console.error('❌ Error updating report status:', error)
       alert('Failed to update report status')
     } finally {
+      setAnalyzingRejection(false)
       setUpdatingStatus(false)
     }
   }
@@ -1256,7 +1268,15 @@ export default function DailyReportsPage() {
                           )}
                           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <QuestionPieChart data={breakdown.answers} />
-                            <SimpleBarChart data={breakdown.answers} xLabel="Answer Options" yLabel="Responses" />
+                            <SimpleBarChart
+                              data={breakdown.answers.map(answer => ({
+                                name: answer.label,
+                                value: answer.value,
+                                color: answer.color,
+                              }))}
+                              xLabel="Answer Options"
+                              yLabel="Responses"
+                            />
                           </div>
                           <ul className="mt-4 space-y-1 text-xs text-gray-600">
                             {breakdown.answers.map(answer => (
@@ -1689,7 +1709,7 @@ export default function DailyReportsPage() {
                       className="w-full btn-secondary flex items-center justify-center space-x-2 bg-red-500 hover:bg-red-600 text-white"
                     >
                       <X className="h-4 w-4" />
-                      <span>{updatingStatus ? 'Rejecting...' : 'Reject'}</span>
+                      <span>{updatingStatus ? (analyzingRejection ? 'Analyzing...' : 'Rejecting...') : 'Reject'}</span>
                     </button>
                     <button
                       onClick={() => handleUpdateStatus('requires_action')}

@@ -1,4 +1,4 @@
-import { collection, getDocs, getDoc, doc, updateDoc, deleteDoc, query, orderBy, limit, where, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, updateDoc, deleteDoc, query, orderBy, limit, where, setDoc, onSnapshot, serverTimestamp, deleteField } from 'firebase/firestore';
 import { db } from './firebase';
 
 export interface DashboardStats {
@@ -66,12 +66,14 @@ export interface ComplianceReport {
   title?: string;
   submittedBy?: string;
   attachments?: ComplianceReportAttachment[];
+  rejectionAnalysis?: RejectionAnalysisResult;
 }
 
 export interface ComplianceAnswer {
   description: string;
   questionId: string;
   answer: 'yes' | 'no' | string;
+  description?: string;
   photos?: string[]; // Array of photo URLs
   notes?: string;
 }
@@ -82,6 +84,14 @@ export interface ComplianceReportAttachment {
   url: string;
   filename: string;
   uploadedDate: string;
+}
+
+export interface RejectionAnalysisResult {
+  reason: string;
+  validationSummary: string;
+  reviewedPhotos: string[];
+  aiModel: string;
+  generatedAt: string;
 }
 
 export interface AccessRequest {
@@ -586,6 +596,79 @@ export class DataService {
     return results.sort((a, b) => b.totalReports - a.totalReports);
   }
 
+  static async getFeederPointReports(
+    feederPointId?: string,
+    options?: { fallbackName?: string; startDate?: Date; endDate?: Date }
+  ): Promise<ComplianceReport[]> {
+    const queries = [];
+
+    if (feederPointId) {
+      queries.push(
+        getDocs(query(collection(db, 'complianceReports'), where('feederPointId', '==', feederPointId)))
+      );
+    }
+
+    if (options?.fallbackName) {
+      queries.push(
+        getDocs(query(collection(db, 'complianceReports'), where('feederPointName', '==', options.fallbackName)))
+      );
+    }
+
+    if (queries.length === 0) {
+      return [];
+    }
+
+    const [startDate, endDate] = [
+      options?.startDate ? new Date(options.startDate) : null,
+      options?.endDate ? new Date(options.endDate) : null,
+    ];
+
+    const reportsMap = new Map<string, ComplianceReport>();
+
+    const snapshots = await Promise.all(queries);
+    snapshots.forEach(snapshot => {
+      snapshot.docs.forEach(docSnapshot => {
+        const data = docSnapshot.data() as ComplianceReport;
+        const report = { ...data, id: docSnapshot.id } as ComplianceReport;
+
+        const reportDate =
+          DataService.coerceDate(report.submittedAt) ||
+          DataService.coerceDate(report.updatedAt) ||
+          DataService.coerceDate(report.createdAt) ||
+          DataService.coerceDate(report.tripDate);
+
+        if (startDate && reportDate && reportDate < startDate) {
+          return;
+        }
+        if (endDate && reportDate && reportDate > endDate) {
+          return;
+        }
+        if (!reportDate && (startDate || endDate)) {
+          return;
+        }
+
+        reportsMap.set(report.id, report);
+      });
+    });
+
+    const reports = Array.from(reportsMap.values());
+    reports.sort((a, b) => {
+      const aDate =
+        DataService.coerceDate(a.submittedAt) ||
+        DataService.coerceDate(a.updatedAt) ||
+        DataService.coerceDate(a.createdAt);
+      const bDate =
+        DataService.coerceDate(b.submittedAt) ||
+        DataService.coerceDate(b.updatedAt) ||
+        DataService.coerceDate(b.createdAt);
+      const aTime = aDate ? aDate.getTime() : 0;
+      const bTime = bDate ? bDate.getTime() : 0;
+      return bTime - aTime;
+    });
+
+    return reports;
+  }
+
   // Get all users
   static onUsersChange(callback: (users: User[]) => void) {
     const q = query(collection(db, 'approvedUsers'), orderBy('createdAt', 'desc'));
@@ -669,7 +752,8 @@ export class DataService {
     reportId: string,
     status: ComplianceReport['status'],
     adminNotes?: string,
-    reviewedBy?: string
+    reviewedBy?: string,
+    rejectionAnalysis?: RejectionAnalysisResult
   ): Promise<void> {
     try {
       const updateData: any = {
@@ -683,6 +767,17 @@ export class DataService {
       }
       if (reviewedBy) {
         updateData.reviewedBy = reviewedBy;
+      }
+      if (status === 'rejected') {
+        updateData.rejectionAnalysis = rejectionAnalysis ?? {
+          reason: 'Automatic AI analysis could not be generated.',
+          validationSummary: 'Gemini validation unavailable. Please add manual notes.',
+          reviewedPhotos: [],
+          aiModel: 'unavailable',
+          generatedAt: new Date().toISOString()
+        };
+      } else {
+        updateData.rejectionAnalysis = deleteField();
       }
 
       await updateDoc(doc(db, 'complianceReports', reportId), updateData);

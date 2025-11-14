@@ -1,24 +1,28 @@
-import { useEffect, useState } from 'react'
-import { 
-  MapPin, 
-  Search, 
-  Filter, 
-  Eye, 
-  Edit, 
-  Trash2, 
-  Users, 
-  Calendar, 
-  AlertTriangle, 
-  CheckCircle, 
+import { useEffect, useMemo, useState } from 'react'
+import {
+  MapPin,
+  Search,
+  Filter,
+  Eye,
+  Edit,
+  Trash2,
+  Users,
+  Calendar,
+  AlertTriangle,
+  CheckCircle,
   Clock,
   TrendingUp,
   Activity,
   Zap,
   Settings,
   User as UserIcon,
-  Plus
+  Plus,
+  FileText,
+  RefreshCw,
+  X,
+  Camera
 } from 'lucide-react'
-import { DataService, FeederPoint, Team, User } from '@/lib/dataService'
+import { ComplianceReport, DataService, FeederPoint, Team, User } from '@/lib/dataService'
 
 export default function FeederPointsPage() {
   const [feederPoints, setFeederPoints] = useState<FeederPoint[]>([])
@@ -28,7 +32,7 @@ export default function FeederPointsPage() {
   const [filteredFeederPoints, setFilteredFeederPoints] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('active')
   const [assignmentFilter, setAssignmentFilter] = useState('all')
   const [selectedFeederPoint, setSelectedFeederPoint] = useState<any>(null)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
@@ -37,6 +41,11 @@ export default function FeederPointsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const [creatingData, setCreatingData] = useState(false)
+  const [feederPointReports, setFeederPointReports] = useState<ComplianceReport[]>([])
+  const [reportsLoading, setReportsLoading] = useState(false)
+  const [reportsError, setReportsError] = useState<string | null>(null)
+  const [reportDateRange, setReportDateRange] = useState<{ start: string; end: string }>({ start: '', end: '' })
+  const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'approved' | 'pending' | 'rejected' | 'requires_action'>('all')
 
   useEffect(() => {
     const unsubscribeFeederPoints = DataService.onFeederPointsChange(feederPointsData => {
@@ -144,9 +153,42 @@ export default function FeederPointsPage() {
     setFilteredFeederPoints(filtered)
   }
 
-  const handleViewDetails = (feederPoint: any) => {
+  const loadReportsForFeederPoint = async (
+    feederPoint: FeederPoint | null,
+    customRange?: { start: string; end: string }
+  ) => {
+    if (!feederPoint) return
+
+    setReportsLoading(true)
+    setReportsError(null)
+    setFeederPointReports([])
+
+    try {
+      const range = customRange || reportDateRange
+      const startDate = range.start ? new Date(range.start) : undefined
+      const endDate = range.end ? new Date(range.end) : undefined
+
+      const reports = await DataService.getFeederPointReports(feederPoint.id, {
+        fallbackName: feederPoint.name,
+        startDate,
+        endDate
+      })
+      setFeederPointReports(reports)
+    } catch (error) {
+      console.error('Error fetching feeder point reports:', error)
+      setReportsError('Unable to load compliance reports. Please try again.')
+    } finally {
+      setReportsLoading(false)
+    }
+  }
+
+  const handleViewDetails = async (feederPoint: any) => {
+    const resetRange = { start: '', end: '' }
+    setReportDateRange(resetRange)
+    setReportStatusFilter('all')
     setSelectedFeederPoint(feederPoint)
     setShowDetailsModal(true)
+    await loadReportsForFeederPoint(feederPoint, resetRange)
   }
 
   const handleEditFeederPoint = (feederPoint: any) => {
@@ -434,7 +476,6 @@ export default function FeederPointsPage() {
               onChange={(e) => setStatusFilter(e.target.value)}
               className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
-              <option value="all">All Status</option>
               <option value="active">Active</option>
               <option value="maintenance">Maintenance</option>
               <option value="inactive">Inactive</option>
@@ -639,6 +680,34 @@ export default function FeederPointsPage() {
         </div>
       </div>
 
+      {/* Feeder Point Details Modal */}
+      {showDetailsModal && selectedFeederPoint && (
+        <FeederPointDetailsModal
+          feederPoint={selectedFeederPoint}
+          reports={feederPointReports}
+          loading={reportsLoading}
+          error={reportsError}
+          dateRange={reportDateRange}
+          onDateRangeChange={range => setReportDateRange(range)}
+          onApplyDateRange={range => {
+            if (selectedFeederPoint) {
+              loadReportsForFeederPoint(selectedFeederPoint, range)
+            }
+          }}
+          statusFilter={reportStatusFilter}
+          onStatusFilterChange={value => setReportStatusFilter(value)}
+          onClose={() => {
+            setShowDetailsModal(false)
+            setSelectedFeederPoint(null)
+            setFeederPointReports([])
+            setReportsError(null)
+            setReportDateRange({ start: '', end: '' })
+            setReportStatusFilter('all')
+          }}
+          onRefresh={() => loadReportsForFeederPoint(selectedFeederPoint)}
+        />
+      )}
+
       {/* Create Feeder Point Modal */}
       {showCreateModal && (
         <FeederPointFormModal
@@ -657,6 +726,465 @@ export default function FeederPointsPage() {
           onSave={handleSaveFeederPoint}
         />
       )}
+    </div>
+  )
+}
+
+interface FeederPointDetailsModalProps {
+  feederPoint: any
+  reports: ComplianceReport[]
+  loading: boolean
+  error: string | null
+  dateRange: { start: string; end: string }
+  onDateRangeChange: (range: { start: string; end: string }) => void
+  onApplyDateRange: (range: { start: string; end: string }) => void
+  statusFilter: 'all' | 'approved' | 'pending' | 'rejected' | 'requires_action'
+  onStatusFilterChange: (value: 'all' | 'approved' | 'pending' | 'rejected' | 'requires_action') => void
+  onClose: () => void
+  onRefresh: () => void
+}
+
+function FeederPointDetailsModal({
+  feederPoint,
+  reports,
+  loading,
+  error,
+  dateRange,
+  onDateRangeChange,
+  onApplyDateRange,
+  statusFilter,
+  onStatusFilterChange,
+  onClose,
+  onRefresh
+}: FeederPointDetailsModalProps) {
+  const summary = useMemo(
+    () => createFeederPointReportSummary(feederPoint, reports),
+    [feederPoint, reports]
+  )
+  const filteredReports = useMemo(() => {
+    if (statusFilter === 'all') return reports
+    return reports.filter(report => (report.status || 'pending') === statusFilter)
+  }, [reports, statusFilter])
+  const statusOptions: { label: string; value: FeederPointDetailsModalProps['statusFilter'] }[] = [
+    { label: 'All', value: 'all' },
+    { label: 'Approved', value: 'approved' },
+    { label: 'Pending', value: 'pending' },
+    { label: 'Rejected', value: 'rejected' },
+    { label: 'Requires Action', value: 'requires_action' }
+  ]
+  const [selectedReport, setSelectedReport] = useState<ComplianceReport | null>(null)
+
+  useEffect(() => {
+    if (!selectedReport) return
+    const exists = filteredReports.some(report =>
+      (report.id || report.dailyTripId) === (selectedReport.id || selectedReport.dailyTripId)
+    )
+    if (!exists) {
+      setSelectedReport(null)
+    }
+  }, [filteredReports, selectedReport])
+
+  const handleRangeChange = (field: 'start' | 'end', value: string) => {
+    onDateRangeChange({
+      ...dateRange,
+      [field]: value
+    })
+  }
+
+  const handleApplyRange = () => {
+    onApplyDateRange(dateRange)
+  }
+
+  const handleClearRange = () => {
+    const cleared = { start: '', end: '' }
+    onDateRangeChange(cleared)
+    onApplyDateRange(cleared)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      <div className="flex min-h-screen items-center justify-center px-4 py-6">
+        <div className="fixed inset-0 bg-gray-900/50" onClick={onClose} />
+        <div className="relative z-10 w-full max-w-6xl overflow-hidden rounded-2xl bg-white shadow-xl">
+          <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+            <div className="flex items-center space-x-3">
+              <FileText className="h-6 w-6 text-blue-600" />
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Feeder Point Compliance Summary</h2>
+                <p className="text-sm text-gray-500">{feederPoint?.name || 'Feeder Point Details'}</p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={onRefresh}
+                disabled={loading}
+                className="inline-flex items-center rounded-full border border-gray-200 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                <RefreshCw className={`mr-1.5 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh Data
+              </button>
+              <button
+                onClick={onClose}
+                className="rounded-full border border-gray-200 p-2 text-gray-500 hover:bg-gray-50"
+                aria-label="Close report modal"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="border-b border-gray-100 bg-gray-50 px-6 py-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="flex flex-col text-sm text-gray-600">
+                <label className="mb-1 font-medium text-gray-700">From</label>
+                <input
+                  type="date"
+                  value={dateRange.start}
+                  onChange={e => handleRangeChange('start', e.target.value)}
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+              <div className="flex flex-col text-sm text-gray-600">
+                <label className="mb-1 font-medium text-gray-700">To</label>
+                <input
+                  type="date"
+                  value={dateRange.end}
+                  onChange={e => handleRangeChange('end', e.target.value)}
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleApplyRange}
+                  disabled={loading}
+                  className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Apply Range
+                </button>
+                <button
+                  onClick={handleClearRange}
+                  disabled={loading || (!dateRange.start && !dateRange.end)}
+                  className="inline-flex items-center rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-white disabled:opacity-50"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="max-h-[80vh] overflow-y-auto px-6 py-6">
+            {loading ? (
+              <div className="flex h-72 flex-col items-center justify-center space-y-3">
+                <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-blue-600" />
+                <p className="text-sm text-gray-500">Loading compliance reports…</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {error && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                    {error}
+                  </div>
+                )}
+
+                <section>
+                  <h3 className="text-xl font-semibold text-gray-900">1. Basic Information</h3>
+                  <div className="mt-3 grid grid-cols-1 gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-700 sm:grid-cols-2">
+                    <p><span className="font-semibold">Feeder Point Name:</span> {summary.basicInfo.name}</p>
+                    <p><span className="font-semibold">Zone:</span> {summary.basicInfo.zone}</p>
+                    <p><span className="font-semibold">Ward:</span> {summary.basicInfo.ward}</p>
+                    <p><span className="font-semibold">Date:</span> {summary.basicInfo.date}</p>
+                    <p><span className="font-semibold">Total Trips:</span> {summary.basicInfo.totalTrips}</p>
+                    <p><span className="font-semibold">Submitted By:</span> {summary.basicInfo.submittedBy}</p>
+                  </div>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-semibold text-gray-900">2. Overall Status (Bullet Format)</h3>
+                  <ul className="mt-3 space-y-1 rounded-xl border border-gray-100 bg-white p-4 text-sm text-gray-700">
+                    <li>Feeder Point Cleanliness: {summary.overallStatus.cleanliness}</li>
+                    <li>Segregation Status: {summary.overallStatus.segregation}</li>
+                    <li>Vehicle Availability: {summary.overallStatus.vehicle}</li>
+                    <li>Swach Worker Presence: {summary.overallStatus.swachWorkers}</li>
+                    <li>Nearby Area Cleanliness: {summary.overallStatus.nearbyCleanliness}</li>
+                    <li>Signboard/QR Availability: {summary.overallStatus.signboard}</li>
+                    <li>Final Compliance Score: {summary.overallStatus.finalScore}</li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-semibold text-gray-900">3. Trip-wise Summary (Table Format)</h3>
+                  <div className="mt-3 overflow-hidden rounded-xl border border-gray-100">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead className="bg-gray-50 text-gray-600">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-semibold">Trip</th>
+                            <th className="px-4 py-3 text-left font-semibold">Time</th>
+                            <th className="px-4 py-3 text-left font-semibold">Distance</th>
+                            <th className="px-4 py-3 text-left font-semibold">Clean</th>
+                            <th className="px-4 py-3 text-left font-semibold">Segregated</th>
+                            <th className="px-4 py-3 text-left font-semibold">Vehicle</th>
+                            <th className="px-4 py-3 text-left font-semibold">Workers</th>
+                            <th className="px-4 py-3 text-left font-semibold">Photo Attached</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 bg-white text-gray-800">
+                          {summary.tripSummaries.map(row => (
+                            <tr key={row.tripLabel}>
+                              <td className="whitespace-nowrap px-4 py-3 font-medium">{row.tripLabel}</td>
+                              <td className="whitespace-nowrap px-4 py-3">{row.time}</td>
+                              <td className="whitespace-nowrap px-4 py-3">{row.distance}</td>
+                              <td className="whitespace-nowrap px-4 py-3">{row.clean}</td>
+                              <td className="whitespace-nowrap px-4 py-3">{row.segregated}</td>
+                              <td className="whitespace-nowrap px-4 py-3">{row.vehicle}</td>
+                              <td className="whitespace-nowrap px-4 py-3">{row.workers}</td>
+                              <td className="whitespace-nowrap px-4 py-3">{row.photoAttached}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-semibold text-gray-900">4. Key Observations (4–5 Bullet Points)</h3>
+                  <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                    {summary.observations.map((item, index) => (
+                      <li key={`observation-${index}`}>{item}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-semibold text-gray-900">5. Recommendations (Action-Oriented)</h3>
+                  <ol className="mt-3 space-y-1 pl-5 text-sm text-gray-700">
+                    {summary.recommendations.map((item, index) => (
+                      <li key={`recommendation-${index}`} className="list-decimal">{item}</li>
+                    ))}
+                  </ol>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-semibold text-gray-900">6. Photo Evidence Section</h3>
+                  <div className="mt-3 grid gap-4 md:grid-cols-3">
+                    {summary.photoEvidence.map((item, index) => (
+                      <div key={item.label} className="flex flex-col rounded-xl border border-gray-100 bg-white p-4 text-sm text-gray-700">
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="font-semibold">{item.label}</span>
+                          <Camera className="h-4 w-4 text-gray-400" />
+                        </div>
+                        {item.photoUrl ? (
+                          <div className="h-32 overflow-hidden rounded-lg border border-gray-100">
+                            <img
+                              src={item.photoUrl}
+                              alt={item.label}
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-gray-200 text-xs text-gray-400">
+                            No photo uploaded
+                          </div>
+                        )}
+                        <span className="mt-2 text-xs text-gray-500">{summary.tripSummaries[index]?.time || '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <h3 className="text-xl font-semibold text-gray-900">Report Library</h3>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm text-gray-600">Complete list of compliance reports captured for this feeder point.</p>
+                    <div className="flex flex-wrap gap-2 text-xs font-medium">
+                      {statusOptions.map(option => (
+                        <button
+                          key={option.value}
+                          onClick={() => onStatusFilterChange(option.value)}
+                          className={`rounded-full px-3 py-1 ${
+                            statusFilter === option.value
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-3 max-h-64 space-y-3 overflow-y-auto rounded-xl border border-gray-100 bg-white p-3">
+                    {reports.length === 0 && (
+                      <div className="text-sm text-gray-500">
+                        No compliance reports are available for this feeder point yet.
+                      </div>
+                    )}
+                    {reports.length > 0 && filteredReports.length === 0 && (
+                      <div className="text-sm text-gray-500">
+                        No reports match the selected status filter.
+                      </div>
+                    )}
+                    {filteredReports.map(report => (
+                      <div key={report.id || report.dailyTripId} className="rounded-lg border border-gray-100 p-3">
+                        <div className="flex flex-wrap items-center justify-between text-sm text-gray-600">
+                          <span className="font-semibold text-gray-900">
+                            {formatReportDate(report) || 'Unscheduled Submission'}
+                          </span>
+                          <span className="rounded-full bg-gray-50 px-2 py-0.5 text-xs capitalize text-gray-700">
+                            {report.status || 'pending'}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-sm font-medium text-gray-900">{report.title || 'Untitled Report'}</p>
+                        {report.description && (
+                          <p className="text-xs text-gray-500">{report.description}</p>
+                        )}
+                        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                          <span>Trip {report.tripNumber || '–'}</span>
+                          <span>{report.userName || report.submittedBy || 'Unknown submitter'}</span>
+                          <span>{report.attachments?.length || 0} attachment(s)</span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                          <span className="text-xs text-gray-500">
+                            {report.priority ? `Priority: ${report.priority}` : ''}
+                          </span>
+                          <button
+                            onClick={() => setSelectedReport(report)}
+                            className="inline-flex items-center rounded-full border border-blue-100 p-2 text-blue-600 hover:bg-blue-50"
+                            aria-label="View report details"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {selectedReport && (
+                  <section>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xl font-semibold text-gray-900">Report Details</h3>
+                      <button
+                        onClick={() => setSelectedReport(null)}
+                        className="text-sm text-gray-500 hover:text-gray-700"
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <div className="mt-3 space-y-4 rounded-xl border border-gray-100 bg-white p-4 text-sm text-gray-700">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-lg font-semibold text-gray-900">{selectedReport.title || 'Untitled Report'}</p>
+                          <p className="text-xs text-gray-500">{formatReportDate(selectedReport)}</p>
+                        </div>
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${getStatusBadgeClasses(selectedReport.status)}`}>
+                          {selectedReport.status || 'pending'}
+                        </span>
+                      </div>
+                      {selectedReport.description && (
+                        <p className="text-sm text-gray-600">{selectedReport.description}</p>
+                      )}
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <DetailField label="Submitted By" value={selectedReport.userName || selectedReport.submittedBy || 'Unknown'} />
+                        <DetailField label="Trip Number" value={selectedReport.tripNumber ? `Trip ${selectedReport.tripNumber}` : 'Not specified'} />
+                        <DetailField label="Distance" value={typeof selectedReport.distanceFromFeederPoint === 'number' ? formatDistance(selectedReport.distanceFromFeederPoint) : 'Not recorded'} />
+                        <DetailField label="Location" value={selectedReport.submittedLocation?.address || 'Not recorded'} />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900">Question Responses</h4>
+                        {selectedReport.answers && selectedReport.answers.length > 0 ? (
+                          <div className="mt-2 space-y-2">
+                            {selectedReport.answers.map((answer, index) => (
+                              <div key={`${answer.questionId || index}-${index}`} className="rounded-lg border border-gray-100 p-3 text-sm">
+                                <p className="text-xs font-semibold uppercase text-gray-500">{answer.questionId || `Question ${index + 1}`}</p>
+                                <p className="text-gray-900">Answer: <span className="font-medium">{answer.answer || '—'}</span></p>
+                                {answer.description && <p className="text-xs text-gray-500">Note: {answer.description}</p>}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-xs text-gray-500">No answers captured for this submission.</p>
+                        )}
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900">Decision Notes</h4>
+                        <p className="mt-2 text-sm text-gray-700">
+                          {selectedReport.adminNotes || 'No admin notes were recorded for this report.'}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Reviewed by {selectedReport.reviewedBy || 'N/A'} on{' '}
+                          {selectedReport.reviewedAt?.toDate?.()?.toLocaleString?.() || 'Not captured'}
+                        </p>
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900">Gemini Evidence Review</h4>
+                        {selectedReport.status === 'rejected' ? (
+                          selectedReport.rejectionAnalysis ? (
+                            <div className="mt-2 space-y-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                              <p className="font-semibold">Reason: {selectedReport.rejectionAnalysis.reason}</p>
+                              <p className="text-xs">{selectedReport.rejectionAnalysis.validationSummary}</p>
+                              <p className="text-xs">
+                                Model: {selectedReport.rejectionAnalysis.aiModel} · Generated{' '}
+                                {new Date(selectedReport.rejectionAnalysis.generatedAt).toLocaleString()}
+                              </p>
+                              <div className="text-xs">
+                                <p className="font-semibold">Photos reviewed</p>
+                                {selectedReport.rejectionAnalysis.reviewedPhotos?.length ? (
+                                  <ul className="list-disc pl-5">
+                                    {selectedReport.rejectionAnalysis.reviewedPhotos.map((url, idx) => (
+                                      <li key={`analysis-photo-${idx}`} className="truncate">
+                                        <a
+                                          href={url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-blue-700 underline"
+                                        >
+                                          {url}
+                                        </a>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : (
+                                  <p>No photo URLs were available.</p>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-xs text-blue-800">
+                              Gemini has not returned a rejection summary yet. Please refresh once analysis completes.
+                            </p>
+                          )
+                        ) : (
+                          <p className="mt-2 text-xs text-gray-500">
+                            AI evidence compression runs only for rejected reports. Status "{selectedReport.status || 'pending'}"
+                            does not include Gemini notes.
+                          </p>
+                        )}
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900">Photos & Attachments</h4>
+                        <div className="mt-2 grid gap-3 md:grid-cols-3">
+                          {aggregateReportPhotos(selectedReport).map(photo => (
+                            <div key={photo} className="h-28 overflow-hidden rounded-lg border border-gray-100">
+                              <img src={photo} alt="Report evidence" className="h-full w-full object-cover" />
+                            </div>
+                          ))}
+                          {aggregateReportPhotos(selectedReport).length === 0 && (
+                            <div className="col-span-full rounded-lg border border-dashed border-gray-200 p-4 text-xs text-gray-500">
+                              No photo evidence attached.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -703,4 +1231,341 @@ function FeederPointFormModal({ title, feederPoint, onClose, onSave }: any) {
       </div>
     </div>
   )
+}
+
+function DetailField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-gray-100 p-3">
+      <p className="text-xs font-semibold uppercase text-gray-500">{label}</p>
+      <p className="text-sm text-gray-900">{value}</p>
+    </div>
+  )
+}
+
+function getStatusBadgeClasses(status: ComplianceReport['status'] | undefined) {
+  switch (status) {
+    case 'approved':
+      return 'bg-green-100 text-green-800';
+    case 'rejected':
+      return 'bg-red-100 text-red-800';
+    case 'requires_action':
+      return 'bg-orange-100 text-orange-800';
+    case 'pending':
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+}
+
+const QUESTION_KEY_MAP = {
+  zone: ['Q1', 'q1', 'q1_zone_name', 'zone_name'],
+  ward: ['Q2', 'q2', 'q2_ward_number', 'ward_number'],
+  cleanliness: ['Q4', 'q4', 'q4_feeder_point_clean', 'feeder_point_clean', 'scp_area_clean'],
+  segregation: ['Q7', 'q7', 'waste_segregated', 'wet_dry_waste_segregation'],
+  vehicle: ['vehicle_separate_compartments', 'vehicle_available', 'vehicle_present'],
+  swachWorkers: ['swach_workers_present', 'swach_workers_count', 'q10', 'Q10', 'q10_swach_workers_present'],
+  surrounding: ['Q5', 'q5', 'q5_surrounding_area_clean', 'surrounding_area_clean', 'surrounding_area_maintained'],
+  signboard: ['Q11', 'q11', 'q11_signboard_qr_display', 'signboard_qr_display', 'qr_display', 'visible_signboard'],
+  overallScore: ['Q12', 'q12', 'overall_score', 'overall_compliance_rating']
+}
+
+function createFeederPointReportSummary(feederPoint: any, rawReports: ComplianceReport[] = []) {
+  const reports = [...rawReports]
+  reports.sort((a, b) => {
+    const aTime = getReportTimestamp(a)?.getTime() || 0
+    const bTime = getReportTimestamp(b)?.getTime() || 0
+    return bTime - aTime
+  })
+
+  const latestReport = reports[0] || null
+  const totalTripsSet = new Set<number>()
+  reports.forEach(report => {
+    if (report?.tripNumber) {
+      totalTripsSet.add(report.tripNumber)
+    }
+  })
+
+  const basicInfo = {
+    name: feederPoint?.name || latestReport?.feederPointName || 'Not Available',
+    zone: findAnswerAcrossReports(reports, QUESTION_KEY_MAP.zone) || feederPoint?.zone || 'Not Reported',
+    ward: findAnswerAcrossReports(reports, QUESTION_KEY_MAP.ward) || feederPoint?.ward || 'Not Reported',
+    date: latestReport ? formatDateDisplay(getReportTimestamp(latestReport)) : formatDateDisplay(new Date()),
+    totalTrips: totalTripsSet.size > 0 ? String(totalTripsSet.size) : reports.length > 0 ? String(reports.length) : '0',
+    submittedBy: latestReport?.submittedBy || latestReport?.userName || 'Not Available'
+  }
+
+  const cleanlinessFlag = interpretBoolean(findAnswerAcrossReports(reports, QUESTION_KEY_MAP.cleanliness))
+  const segregationFlag = interpretBoolean(findAnswerAcrossReports(reports, QUESTION_KEY_MAP.segregation))
+  const vehicleFlag = interpretBoolean(findAnswerAcrossReports(reports, QUESTION_KEY_MAP.vehicle))
+  const areaFlag = interpretBoolean(findAnswerAcrossReports(reports, QUESTION_KEY_MAP.surrounding))
+  const signboardFlag = interpretBoolean(findAnswerAcrossReports(reports, QUESTION_KEY_MAP.signboard))
+
+  const overallStatus = {
+    cleanliness: cleanlinessFlag === false ? 'Not Clean' : cleanlinessFlag === true ? 'Clean' : 'Data Pending',
+    segregation: segregationFlag === false ? 'Not Segregated' : segregationFlag === true ? 'Segregated' : 'Data Pending',
+    vehicle: vehicleFlag === false ? 'Not Present' : vehicleFlag === true ? 'Present' : 'Data Pending',
+    swachWorkers: formatSwachWorkerPresence(findAnswerAcrossReports(reports, QUESTION_KEY_MAP.swachWorkers)),
+    nearbyCleanliness: areaFlag === false ? 'No' : areaFlag === true ? 'Yes' : 'Data Pending',
+    signboard: signboardFlag === false ? 'No' : signboardFlag === true ? 'Yes' : 'Data Pending',
+    finalScore: formatFinalScore(findAnswerAcrossReports(reports, QUESTION_KEY_MAP.overallScore))
+  }
+
+  const tripSummaries = buildTripSummaries(reports)
+
+  const observations = buildObservations(overallStatus, basicInfo, reports.length)
+  const recommendations = buildRecommendations(overallStatus)
+
+  const photoEvidence = tripSummaries.map((trip, index) => ({
+    label: `Trip ${index + 1} Photo`,
+    photoUrl: trip.photoUrl
+  }))
+
+  return {
+    basicInfo,
+    overallStatus,
+    tripSummaries,
+    observations,
+    recommendations,
+    photoEvidence
+  }
+}
+
+function buildTripSummaries(reports: ComplianceReport[]) {
+  const tripOrder = [1, 2, 3]
+  const tripMap = new Map<number, ComplianceReport>()
+
+  reports.forEach(report => {
+    if (report.tripNumber && !tripMap.has(report.tripNumber)) {
+      tripMap.set(report.tripNumber, report)
+    }
+  })
+
+  return tripOrder.map((tripNumber, index) => {
+    const report = tripMap.get(tripNumber) || reports[index] || null
+    const cleanAnswer = findAnswerInReport(report, QUESTION_KEY_MAP.cleanliness)
+    const segregationAnswer = findAnswerInReport(report, QUESTION_KEY_MAP.segregation)
+    const vehicleAnswer = findAnswerInReport(report, QUESTION_KEY_MAP.vehicle)
+    const workersAnswer = findAnswerInReport(report, QUESTION_KEY_MAP.swachWorkers)
+
+    const distance = typeof report?.distanceFromFeederPoint === 'number'
+      ? formatDistance(report.distanceFromFeederPoint)
+      : '—'
+
+    const photoUrl = getPrimaryPhoto(report)
+
+    return {
+      tripLabel: `Trip ${tripNumber}`,
+      time: report ? formatDateDisplay(getReportTimestamp(report), { hour: '2-digit', minute: '2-digit' }) : 'Pending',
+      distance,
+      clean: formatYesNo(interpretBoolean(cleanAnswer)),
+      segregated: formatYesNo(interpretBoolean(segregationAnswer)),
+      vehicle: formatYesNo(interpretBoolean(vehicleAnswer)),
+      workers: formatSwachWorkerPresence(workersAnswer),
+      photoAttached: photoUrl ? 'Yes' : 'No',
+      photoUrl
+    }
+  })
+}
+
+function findAnswerAcrossReports(reports: ComplianceReport[], questionIds: string[]) {
+  const lookup = questionIds.map(id => id.toLowerCase())
+  for (const report of reports) {
+    const answer = report?.answers?.find(entry => entry.questionId && lookup.includes(entry.questionId.toLowerCase()))
+    if (answer) {
+      return normalizeAnswer(answer.answer)
+    }
+  }
+  return null
+}
+
+function findAnswerInReport(report: ComplianceReport | null, questionIds: string[]) {
+  if (!report) return null
+  const lookup = questionIds.map(id => id.toLowerCase())
+  const entry = report.answers?.find(answer => answer.questionId && lookup.includes(answer.questionId.toLowerCase()))
+  return entry ? normalizeAnswer(entry.answer) : null
+}
+
+function normalizeAnswer(answer: string | 'yes' | 'no' | undefined) {
+  if (answer === undefined || answer === null) return null
+  if (typeof answer === 'string') {
+    return answer
+  }
+  return answer
+}
+
+function interpretBoolean(value: string | null) {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  if (['yes', 'y', 'true', 'clean', 'present', 'available', 'segregated', 'ok', 'good'].includes(normalized)) {
+    return true
+  }
+  if (['no', 'n', 'false', 'not clean', 'absent', 'not present', 'not segregated', 'poor'].includes(normalized)) {
+    return false
+  }
+  if (normalized === 'partial') {
+    return false
+  }
+  return null
+}
+
+function formatYesNo(value: boolean | null) {
+  if (value === true) return 'Yes'
+  if (value === false) return 'No'
+  return 'Data Pending'
+}
+
+function formatSwachWorkerPresence(value: string | null) {
+  if (!value) return 'Data Pending'
+  const numeric = parseInt(value, 10)
+  if (!Number.isNaN(numeric)) {
+    return numeric === 0 ? 'Not Present' : `${numeric} worker${numeric === 1 ? '' : 's'} present`
+  }
+  const booleanValue = interpretBoolean(value)
+  if (booleanValue === true) return 'Present'
+  if (booleanValue === false) return 'Not Present'
+  return value
+}
+
+function formatFinalScore(value: string | null) {
+  if (!value) return 'Average'
+  const normalized = value.trim().toLowerCase()
+  if (['excellent', 'good', 'average', 'poor'].includes(normalized)) {
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+  }
+  const numeric = parseFloat(normalized)
+  if (!Number.isNaN(numeric)) {
+    if (numeric >= 4.5) return 'Excellent'
+    if (numeric >= 3.5) return 'Good'
+    if (numeric >= 2.5) return 'Average'
+    return 'Poor'
+  }
+  return 'Average'
+}
+
+function formatDistance(distanceInMeters: number) {
+  if (distanceInMeters >= 1000) {
+    return `${(distanceInMeters / 1000).toFixed(1)} km`
+  }
+  return `${Math.round(distanceInMeters)} m`
+}
+
+function getReportTimestamp(report?: ComplianceReport | null) {
+  if (!report) return null
+  return (
+    coerceDate(report.submittedAt) ||
+    coerceDate(report.updatedAt) ||
+    coerceDate(report.createdAt) ||
+    (report.tripDate ? coerceDate(report.tripDate) : null)
+  )
+}
+
+function coerceDate(value: any): Date | null {
+  if (!value) return null
+  if (value instanceof Date) return value
+  if (typeof value === 'string') {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+  if (typeof value.toDate === 'function') {
+    try {
+      return value.toDate()
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function formatDateDisplay(value: Date | null, options?: Intl.DateTimeFormatOptions) {
+  if (!value) return 'Not Available'
+  const formatterOptions = options || { year: 'numeric', month: 'short', day: 'numeric' }
+  return value.toLocaleString(undefined, formatterOptions)
+}
+
+function getPrimaryPhoto(report: ComplianceReport | null) {
+  if (!report) return null
+  const attachment = report.attachments?.find(item => item.type === 'photo') || report.attachments?.[0]
+  if (attachment?.url) {
+    return attachment.url
+  }
+  for (const answer of report.answers || []) {
+    if (answer.photos && answer.photos.length > 0) {
+      return answer.photos[0]
+    }
+  }
+  return null
+}
+
+function buildObservations(overallStatus: any, basicInfo: any, reportCount: number) {
+  const observations: string[] = []
+
+  observations.push(
+    reportCount > 0
+      ? `Latest submission recorded on ${basicInfo.date}.`
+      : 'No compliance submissions have been logged for this feeder point yet.'
+  )
+  observations.push(`Feeder point cleanliness is noted as ${overallStatus.cleanliness.toLowerCase()}.`)
+  observations.push(`Segregation check outcome is ${overallStatus.segregation.toLowerCase()}.`)
+  observations.push(`Swach worker presence recorded as ${overallStatus.swachWorkers}.`)
+  observations.push(`Signboard / QR visibility marked ${overallStatus.signboard}.`)
+
+  return observations.slice(0, 5)
+}
+
+function buildRecommendations(overallStatus: any) {
+  const recommendations: string[] = []
+
+  if (overallStatus.cleanliness !== 'Clean') {
+    recommendations.push('Schedule a focused cleaning drive before the next dispatch window.')
+  } else {
+    recommendations.push('Continue sustaining current sweeping standards before each trip.')
+  }
+
+  if (overallStatus.segregation !== 'Segregated') {
+    recommendations.push('Deploy a segregation marshal to check wet/dry segregation at arrival.')
+  } else {
+    recommendations.push('Document successful segregation checks with annotated photos.')
+  }
+
+  if (overallStatus.vehicle !== 'Present') {
+    recommendations.push('Assign a standby collection vehicle to avoid missed trips.')
+  } else {
+    recommendations.push('Keep vehicle readiness log updated with fuel and maintenance status.')
+  }
+
+  if (overallStatus.swachWorkers?.toLowerCase().includes('not')) {
+    recommendations.push('Realign swach worker roster to guarantee presence across all trips.')
+  } else {
+    recommendations.push('Rotate swach workers to prevent fatigue and keep PPE compliance high.')
+  }
+
+  if (overallStatus.signboard !== 'Yes') {
+    recommendations.push('Install or repair QR-enabled signage at the entry point for citizens.')
+  } else {
+    recommendations.push('Audit the QR signage weekly to ensure scanability and cleanliness.')
+  }
+
+  return recommendations.slice(0, 5)
+}
+
+function formatReportDate(report: ComplianceReport) {
+  const timestamp = getReportTimestamp(report)
+  return timestamp ? timestamp.toLocaleString() : null
+}
+
+function aggregateReportPhotos(report: ComplianceReport | null) {
+  if (!report) return []
+  const photos: string[] = []
+  report.attachments?.forEach(attachment => {
+    if (attachment.url) {
+      photos.push(attachment.url)
+    }
+  })
+  report.answers?.forEach(answer => {
+    if (answer.photos) {
+      answer.photos.forEach(url => {
+        if (url) photos.push(url)
+      })
+    }
+  })
+  return Array.from(new Set(photos))
 }
