@@ -402,7 +402,7 @@ export class DataService {
     const collectReports = (snapshot: any) => {
       snapshot.docs.forEach((docSnapshot: any) => {
         const data = docSnapshot.data();
-        const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+        const report = { ...data, id: docSnapshot.id } as ComplianceReport;
 
         const reportDate =
           DataService.coerceDate(report.submittedAt) ||
@@ -462,7 +462,7 @@ export class DataService {
           return;
         }
 
-        const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+        const report = { ...data, id: docSnapshot.id } as ComplianceReport;
 
         const reportDate =
           DataService.coerceDate(report.submittedAt) ||
@@ -515,7 +515,7 @@ export class DataService {
 
     snapshot.docs.forEach(docSnapshot => {
       const data = docSnapshot.data() as ComplianceReport;
-      const report = { id: docSnapshot.id, ...data } as ComplianceReport;
+      const report = { ...data, id: docSnapshot.id } as ComplianceReport;
 
       const reportDate =
         DataService.coerceDate(report.submittedAt) ||
