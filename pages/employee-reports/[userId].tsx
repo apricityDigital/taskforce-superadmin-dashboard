@@ -431,7 +431,7 @@ export default function EmployeeReportsPage() {
                 </div>
                 <div className="border border-gray-200 rounded-lg p-4">
                   <h3 className="text-md font-semibold text-gray-900 mb-4">Feeder Point Distribution</h3>
-                  <SimpleBarChart data={feederDistribution} />
+                  <SimpleBarChart data={feederDistribution} xLabel="Feeder Points" yLabel="Reports" />
                 </div>
               </div>
             </div>

@@ -846,6 +846,8 @@ export default function EmployeeTrackerPage() {
                         yes: stat.yes,
                         no: stat.no
                       }))}
+                      xLabel="Question"
+                      yLabel="Responses"
                     />
                   </div>
                 )}
@@ -858,7 +860,7 @@ export default function EmployeeTrackerPage() {
                     </div>
                     <div className="border border-gray-200 rounded-lg p-4">
                       <h3 className="text-sm font-semibold text-gray-900 mb-4">Trips Distribution</h3>
-                      <SimpleBarChart data={feederTripData} />
+                    <SimpleBarChart data={feederTripData} xLabel="Trip" yLabel="Reports" />
                     </div>
                   </div>
                 )}

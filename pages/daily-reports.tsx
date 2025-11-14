@@ -23,13 +23,24 @@ import {
   ChevronLeft,
   ChevronRight,
   Grid3X3,
-  Maximize2
+  Maximize2,
+  Recycle,
+  UserCheck,
+  Shirt,
+  Truck,
+  Building,
+  Leaf,
+  Droplets,
+  BarChart3,
+  QrCode,
+  Award
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { DataService, ComplianceReport } from '@/lib/dataService'
 import { AIService, DailyReportData } from '@/lib/aiService'
 import { useAuth } from '@/contexts/AuthContext'
 import { SimpleBarChart } from '@/components/charts/SimpleBarChart'
-import { SummaryTrendChart } from '@/components/charts/SummaryTrendChart'
+import { QuestionPieChart } from '@/components/charts/QuestionPieChart'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
@@ -45,9 +56,399 @@ const StatusPieChart = dynamic(() => import('@/components/charts/StatusPieChart'
   ssr: false,
 })
 
-interface AiSummaryChartData {
-  barData: Array<{ name: string; yes: number; no: number; }>;
-  individualBarData: { [key: string]: Array<{ name: string; value: number; color: string; }> };
+const YES_COLOR = '#22c55e'
+const NO_COLOR = '#ef4444'
+const SUMMARY_POINT_LIMIT = 4
+const CATEGORY_COLORS = ['#7c3aed', '#0ea5e9', '#f97316', '#14b8a6', '#ec4899', '#a855f7', '#22d3ee', '#facc15']
+const YES_ANSWER_VALUES = new Set(['yes', 'y', 'true', '✔️', '✅'])
+const NO_ANSWER_VALUES = new Set(['no', 'n', 'false', '❌', '✖️'])
+const HIDDEN_QUESTION_CHART_IDS = new Set(['visible_signboard', 'overall_compliance_rating'])
+const SWACH_QUESTION_ID = 'swatch_workers_count'
+
+const QUESTION_METADATA: Record<string, { label: string; icon: LucideIcon }> = {}
+
+const registerQuestionMetadata = (keys: string | string[], label: string, icon: LucideIcon) => {
+  const list = Array.isArray(keys) ? keys : [keys]
+  list
+    .map(key => key?.trim())
+    .filter((key): key is string => Boolean(key))
+    .forEach(key => {
+      QUESTION_METADATA[key] = { label, icon }
+    })
+}
+
+registerQuestionMetadata(['scp_area_clean', 'scp', 'scp_area'], 'SCP Area Clean', Sparkles)
+registerQuestionMetadata(['waste_segregated', 'wet_dry_waste_segregation'], 'Waste Segregation', Recycle)
+registerQuestionMetadata(['staff_present'], 'Staff Presence', Users)
+registerQuestionMetadata(['swach_workers_present', 'swach_workers_count', 'swatch_workers_count', 'q10', 'Q10', 'q10_swach_workers_present'], 'Swach Workers Present', UserCheck)
+registerQuestionMetadata(['workers_wearing_uniform', 'driver_helper_uniform'], 'Uniform Compliance', Shirt)
+registerQuestionMetadata(['collection_team_mixing_waste'], 'Team Mixing Waste', AlertTriangle)
+registerQuestionMetadata(['vehicle_separate_compartments'], 'Vehicle Compartments', Truck)
+registerQuestionMetadata(['Q1', 'q1', 'q1_zone_name', 'zone_name'], 'Zone Name', MapPin)
+registerQuestionMetadata(['Q2', 'q2', 'q2_ward_number', 'ward_number'], 'Ward Number', Grid3X3)
+registerQuestionMetadata(['Q3', 'q3', 'q3_sc_point_name', 'sc_point_name', 'sc_point'], 'SC Point Name', Building)
+registerQuestionMetadata(['Q4', 'q4', 'q4_feeder_point_clean', 'feeder_point_clean'], 'Feeder Point Clean', Sparkles)
+registerQuestionMetadata(['Q5', 'q5', 'q5_surrounding_area_clean', 'surrounding_area_clean', 'surrounding_area_maintained'], 'Surrounding Area Clean', Leaf)
+registerQuestionMetadata(['Q6', 'q6', 'q6_drains_stormwater_clean', 'drains_stormwater_clean', 'drains_clean'], 'Drains / Stormwater Clean', Droplets)
+registerQuestionMetadata(['Q7', 'q7', 'q7_wet_dry_waste_segregation'], 'Wet/Dry Waste Segregation', Recycle)
+registerQuestionMetadata(['Q8', 'q8', 'q8_waste_volume_reasonable', 'waste_volume_reasonable'], 'Waste Volume Reasonable', BarChart3)
+registerQuestionMetadata(['Q9', 'q9', 'q9_current_waste_status', 'current_waste_status', 'waste_collection_status'], 'Current Waste Status', Truck)
+registerQuestionMetadata(['Q11', 'q11', 'q11_signboard_qr_display', 'signboard_qr_display', 'qr_display', 'visible_signboard'], 'Signboard / QR Display', QrCode)
+registerQuestionMetadata(['Q12', 'q12', 'q12_overall_score', 'overall_score', 'overall_compliance_rating'], 'Overall Score', Award)
+
+interface QuestionAnswerAggregate {
+  normalized: string;
+  label: string;
+  value: number;
+  color: string;
+}
+
+interface QuestionBreakdown {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  totalResponses: number;
+  yesCount: number;
+  noCount: number;
+  answers: QuestionAnswerAggregate[];
+}
+
+interface MemberQuestionConfig {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  aliases?: string[];
+}
+
+interface MemberQuestionAnswerCount {
+  normalized: string;
+  label: string;
+  count: number;
+}
+
+interface MemberQuestionRow {
+  memberId: string;
+  memberName: string;
+  teamName?: string;
+  totalReports: number;
+  answers: Partial<Record<string, MemberQuestionAnswerCount[]>>;
+}
+
+interface QuestionAnswerRecord {
+  normalized: string;
+  label: string;
+  count: number;
+}
+
+const MEMBER_QUESTION_CONFIG: MemberQuestionConfig[] = [
+  {
+    id: 'scp_area_clean',
+    label: 'SCP Area Clean',
+    icon: Sparkles,
+    aliases: ['scp', 'scp_area', 'q4', 'q4_feeder_point_clean', 'feeder_point_clean'],
+  },
+  {
+    id: 'surrounding_area_maintained',
+    label: 'Surrounding Area Maintained',
+    icon: Leaf,
+    aliases: ['surrounding_area_clean', 'q5', 'q5_surrounding_area_clean'],
+  },
+  {
+    id: 'drains_clean',
+    label: 'Drains / Stormwater Clean',
+    icon: Droplets,
+    aliases: ['drains_stormwater_clean', 'q6', 'q6_drains_stormwater_clean'],
+  },
+  {
+    id: 'waste_segregated',
+    label: 'Waste Segregation',
+    icon: Recycle,
+    aliases: ['wet_dry_waste_segregation', 'q7', 'q7_wet_dry_waste_segregation'],
+  },
+  {
+    id: 'waste_volume_reasonable',
+    label: 'Waste Volume Reasonable',
+    icon: BarChart3,
+    aliases: ['q8', 'q8_waste_volume_reasonable'],
+  },
+  {
+    id: 'waste_collection_status',
+    label: 'Waste Collection Status',
+    icon: Truck,
+    aliases: ['current_waste_status', 'q9', 'q9_current_waste_status'],
+  },
+  {
+    id: 'swatch_workers_count',
+    label: 'Swach Workers Count',
+    icon: Users,
+    aliases: ['swach_workers_present', 'swach_workers_count', 'q10', 'q10_swach_workers_present', 'staff_present'],
+  },
+  {
+    id: 'visible_signboard',
+    label: 'Visible Signboard / QR',
+    icon: QrCode,
+    aliases: ['signboard_qr_display', 'q11', 'q11_signboard_qr_display', 'qr_display'],
+  },
+  {
+    id: 'overall_compliance_rating',
+    label: 'Overall Compliance Rating',
+    icon: Award,
+    aliases: ['overall_score', 'q12', 'q12_overall_score'],
+  },
+]
+
+const normalizeAnswerValue = (value: unknown) => {
+  if (value === null || value === undefined) return 'unspecified'
+  return value
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ') || 'unspecified'
+}
+
+const formatAnswerDisplay = (rawValue: unknown, normalized: string) => {
+  if (normalized === 'unspecified') return 'Not Provided'
+  if (normalized === 'yes') return 'Yes'
+  if (normalized === 'no') return 'No'
+
+  const raw = rawValue?.toString().trim()
+  if (raw) return raw
+
+  return normalized
+    .split(' ')
+    .map(part => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(' ')
+}
+
+const buildSummaryPoints = (summary: string | null): string[] => {
+  if (!summary) return []
+
+  const cleanedLines = summary
+    .split(/\n+/)
+    .map(line => line.replace(/^[\d\.\-\)\u2022•]+\s*/, '').trim())
+    .filter(Boolean)
+
+  const uniqueLines: string[] = []
+  const seen = new Set<string>()
+
+  for (const line of cleanedLines) {
+    const key = line.toLowerCase()
+    if (!seen.has(key)) {
+      seen.add(key)
+      uniqueLines.push(line)
+    }
+    if (uniqueLines.length >= SUMMARY_POINT_LIMIT) break
+  }
+
+  return uniqueLines
+}
+
+const getAnswerColor = (normalized: string, index: number) => {
+  if (YES_ANSWER_VALUES.has(normalized)) return YES_COLOR
+  if (NO_ANSWER_VALUES.has(normalized)) return NO_COLOR
+  return CATEGORY_COLORS[index % CATEGORY_COLORS.length]
+}
+
+const slugifyQuestionId = (value: string) => {
+  if (!value) return ''
+  return value
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+const MEMBER_QUESTION_ALIAS_MAP = new Map<string, string>()
+MEMBER_QUESTION_CONFIG.forEach(question => {
+  const keys = [question.id, ...(question.aliases ?? [])]
+  keys
+    .map(key => slugifyQuestionId(key))
+    .filter(Boolean)
+    .forEach(slug => {
+      MEMBER_QUESTION_ALIAS_MAP.set(slug, question.id)
+    })
+})
+
+const getReportMemberKey = (report: ComplianceReport) => report.userId || report.userName || report.id
+const formatReportDate = (report: ComplianceReport) => {
+  try {
+    if (report.submittedAt?.toDate) {
+      return report.submittedAt.toDate().toLocaleString()
+    }
+    const parsed = new Date(report.submittedAt)
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleString()
+    }
+  } catch {
+    // ignore parsing errors
+  }
+  return '—'
+}
+
+const buildMemberQuestionStats = (reports: ComplianceReport[]): MemberQuestionRow[] => {
+  if (!reports?.length) return []
+
+  const memberMap = new Map<string, MemberQuestionRow>()
+
+  reports.forEach(report => {
+    const memberKey = getReportMemberKey(report)
+    if (!memberKey) return
+
+    if (!memberMap.has(memberKey)) {
+      memberMap.set(memberKey, {
+        memberId: memberKey,
+        memberName: report.userName || 'Unassigned Member',
+        teamName: report.teamName,
+        totalReports: 0,
+        answers: {},
+      })
+    }
+
+    const memberSummary = memberMap.get(memberKey)!
+    memberSummary.totalReports += 1
+
+    report.answers?.forEach(answer => {
+      if (!answer.questionId) return
+      const questionSlug = slugifyQuestionId(answer.questionId)
+      const canonicalId = MEMBER_QUESTION_ALIAS_MAP.get(questionSlug)
+      if (!canonicalId) return
+
+      const normalizedAnswer = normalizeAnswerValue(answer.answer)
+      const displayLabel = formatAnswerDisplay(answer.answer, normalizedAnswer)
+
+      if (!memberSummary.answers[canonicalId]) {
+        memberSummary.answers[canonicalId] = []
+      }
+
+      const bucket = memberSummary.answers[canonicalId]!
+      const existing = bucket.find(entry => entry.normalized === normalizedAnswer)
+      if (existing) {
+        existing.count += 1
+      } else {
+        bucket.push({ normalized: normalizedAnswer, label: displayLabel, count: 1 })
+      }
+    })
+  })
+
+  return Array.from(memberMap.values()).sort((a, b) => {
+    if (b.totalReports !== a.totalReports) return b.totalReports - a.totalReports
+    return a.memberName.localeCompare(b.memberName)
+  })
+}
+
+function MemberAnswerCell({ answers }: { answers?: MemberQuestionAnswerCount[] }) {
+  if (!answers || answers.length === 0) {
+    return <span className="text-xs text-gray-400">—</span>
+  }
+
+  const total = answers.reduce((sum, entry) => sum + entry.count, 0)
+  const yesCount = answers
+    .filter(entry => YES_ANSWER_VALUES.has(entry.normalized))
+    .reduce((sum, entry) => sum + entry.count, 0)
+  const noCount = answers
+    .filter(entry => NO_ANSWER_VALUES.has(entry.normalized))
+    .reduce((sum, entry) => sum + entry.count, 0)
+
+  if (yesCount + noCount > 0) {
+    const yesPercent = Math.round((yesCount / total) * 100) || 0
+    const noPercent = Math.round((noCount / total) * 100) || 0
+    return (
+      <div className="space-y-1 text-[11px] leading-4">
+        <div className="flex items-center justify-between text-emerald-600">
+          <span>Yes</span>
+          <span className="font-semibold">{yesPercent}%</span>
+        </div>
+        <div className="flex items-center justify-between text-rose-600">
+          <span>No</span>
+          <span className="font-semibold">{noPercent}%</span>
+        </div>
+      </div>
+    )
+  }
+
+  const sorted = [...answers].sort((a, b) => b.count - a.count)
+  return (
+    <div className="space-y-1 text-[11px] leading-4 text-gray-700">
+      {sorted.slice(0, 2).map(entry => (
+        <div key={`${entry.normalized}-${entry.label}`} className="flex items-center justify-between gap-2">
+          <span className="truncate">{entry.label}</span>
+          <span className="font-semibold text-gray-900">{entry.count}</span>
+        </div>
+      ))}
+      {sorted.length > 2 && (
+        <p className="text-[10px] text-gray-500">+ {sorted.length - 2} more</p>
+      )}
+    </div>
+  )
+}
+
+const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown[] => {
+  if (!reports?.length) return []
+
+  const counts = new Map<string, Map<string, QuestionAnswerRecord>>()
+
+  reports.forEach(report => {
+    report.answers?.forEach(answer => {
+      if (!answer.questionId) return
+      const questionSlug = slugifyQuestionId(answer.questionId)
+      const canonicalId = MEMBER_QUESTION_ALIAS_MAP.get(questionSlug)
+      if (!canonicalId) return
+
+      const normalized = normalizeAnswerValue(answer.answer)
+      const label = formatAnswerDisplay(answer.answer, normalized)
+
+      if (!counts.has(canonicalId)) {
+        counts.set(canonicalId, new Map())
+      }
+
+      const questionMap = counts.get(canonicalId)!
+      if (questionMap.has(normalized)) {
+        questionMap.get(normalized)!.count += 1
+      } else {
+        questionMap.set(normalized, {
+          normalized,
+          label,
+          count: 1,
+        })
+      }
+    })
+  })
+
+  return MEMBER_QUESTION_CONFIG.reduce<QuestionBreakdown[]>((acc, question) => {
+    const answerMap = counts.get(question.id)
+    if (!answerMap) return acc
+
+    const sortedAnswers = Array.from(answerMap.values()).sort((a, b) => b.count - a.count)
+    const totalResponses = sortedAnswers.reduce((sum, entry) => sum + entry.count, 0)
+    if (!totalResponses) return acc
+
+    const yesCount = sortedAnswers
+      .filter(entry => YES_ANSWER_VALUES.has(entry.normalized))
+      .reduce((sum, entry) => sum + entry.count, 0)
+    const noCount = sortedAnswers
+      .filter(entry => NO_ANSWER_VALUES.has(entry.normalized))
+      .reduce((sum, entry) => sum + entry.count, 0)
+
+    const answers = sortedAnswers.map((entry, index) => ({
+      normalized: entry.normalized,
+      label: entry.label,
+      value: entry.count,
+      color: getAnswerColor(entry.normalized, index),
+    }))
+
+    acc.push({
+      id: question.id,
+      label: question.label,
+      icon: question.icon,
+      totalResponses,
+      yesCount,
+      noCount,
+      answers,
+    })
+
+    return acc
+  }, [])
 }
 
 export default function DailyReportsPage() {
@@ -74,61 +475,144 @@ export default function DailyReportsPage() {
   const [allImages, setAllImages] = useState<Array<{ url: string, title: string, type: 'answer' | 'attachment' }>>([])
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
   const summaryRef = useRef<HTMLDivElement>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
+  const [swachFeederFilter, setSwachFeederFilter] = useState<'all' | string>('all')
+  const [swachTripFilter, setSwachTripFilter] = useState<'all' | ComplianceReport['tripNumber']>('all')
+  const captureSummarySnapshot = async () => {
+    if (!summaryRef.current) return null
+    const scale = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2
+    const canvas = await html2canvas(summaryRef.current, {
+      scale,
+      scrollY: typeof window !== 'undefined' ? -window.scrollY : 0,
+      backgroundColor: '#ffffff'
+    })
+    const imgData = canvas.toDataURL('image/png')
+    return { canvas, imgData }
+  }
 
-  const [aiSummaryChartData, setAiSummaryChartData] = useState<AiSummaryChartData | null>(null)
-
-  const handleDownloadPdf = () => {
-    if (summaryRef.current) {
-      const input = summaryRef.current;
-      html2canvas(input, { scrollY: -window.scrollY }).then(canvas => {
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const canvasWidth = canvas.width;
-        const canvasHeight = canvas.height;
-        const ratio = canvasWidth / pdfWidth;
-        const imgHeight = canvasHeight / ratio;
-        let heightLeft = imgHeight;
-        let position = 0;
-
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-        heightLeft -= pdfHeight;
-
-        while (heightLeft > 0) {
-          position -= pdfHeight;
-          pdf.addPage();
-          pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-          heightLeft -= pdfHeight;
-        }
-        pdf.save(`Daily_AI_Concise_Summary_${selectedDate}.pdf`);
-      });
+  const conciseSummaryPoints = useMemo(() => buildSummaryPoints(dailyAiSummary), [dailyAiSummary])
+  const swachFilterOptions = useMemo(() => {
+    const feeders = new Set<string>()
+    const trips = new Set<ComplianceReport['tripNumber']>()
+    reports.forEach(report => {
+      if (report.feederPointName) {
+        feeders.add(report.feederPointName)
+      }
+      if (report.tripNumber) {
+        trips.add(report.tripNumber)
+      }
+    })
+    return {
+      feeders: Array.from(feeders).sort((a, b) => a.localeCompare(b)),
+      trips: Array.from(trips).sort((a, b) => Number(a) - Number(b)) as ComplianceReport['tripNumber'][],
     }
+  }, [reports])
+  const filteredSwachReports = useMemo(() => {
+    return reports.filter(report => {
+      const matchesFeeder = swachFeederFilter === 'all' || report.feederPointName === swachFeederFilter
+      const matchesTrip = swachTripFilter === 'all' || report.tripNumber === swachTripFilter
+      return matchesFeeder && matchesTrip
+    })
+  }, [reports, swachFeederFilter, swachTripFilter])
+  const baseQuestionBreakdowns = useMemo(() => buildQuestionBreakdowns(reports), [reports])
+  const swachFilteredBreakdown = useMemo(() => {
+    if (swachFeederFilter === 'all' && swachTripFilter === 'all') {
+      return null
+    }
+    const breakdown = buildQuestionBreakdowns(filteredSwachReports).find(b => b.id === SWACH_QUESTION_ID)
+    if (breakdown) return breakdown
+    const meta = MEMBER_QUESTION_CONFIG.find(question => question.id === SWACH_QUESTION_ID)
+    if (!meta) return null
+    return {
+      id: meta.id,
+      label: meta.label,
+      icon: meta.icon,
+      totalResponses: 0,
+      yesCount: 0,
+      noCount: 0,
+      answers: [],
+    }
+  }, [filteredSwachReports, swachFeederFilter, swachTripFilter])
+  const questionBreakdowns = useMemo(() => {
+    const patched = baseQuestionBreakdowns.map(breakdown => {
+      if (breakdown.id === SWACH_QUESTION_ID && swachFilteredBreakdown) {
+        return swachFilteredBreakdown
+      }
+      return breakdown
+    })
+    if (swachFilteredBreakdown && !patched.some(breakdown => breakdown.id === SWACH_QUESTION_ID)) {
+      patched.push(swachFilteredBreakdown)
+    }
+    return patched.filter(breakdown => !HIDDEN_QUESTION_CHART_IDS.has(breakdown.id))
+  }, [baseQuestionBreakdowns, swachFilteredBreakdown])
+  const memberQuestionStats = useMemo(() => buildMemberQuestionStats(reports), [reports])
+  const selectedMember = useMemo(
+    () => memberQuestionStats.find(member => member.memberId === selectedMemberId) || null,
+    [memberQuestionStats, selectedMemberId]
+  )
+  const selectedMemberReports = useMemo(() => {
+    if (!selectedMemberId) return []
+    return reports
+      .filter(report => getReportMemberKey(report) === selectedMemberId)
+      .sort((a, b) => {
+        const aTime = a.submittedAt?.toDate ? a.submittedAt.toDate().getTime() : new Date(a.submittedAt).getTime()
+        const bTime = b.submittedAt?.toDate ? b.submittedAt.toDate().getTime() : new Date(b.submittedAt).getTime()
+        return bTime - aTime
+      })
+  }, [reports, selectedMemberId])
+  const selectedMemberFeederPoints = useMemo(() => {
+    if (!selectedMemberReports.length) return []
+    const names = new Set<string>()
+    selectedMemberReports.forEach(report => {
+      if (report.feederPointName) {
+        names.add(report.feederPointName)
+      }
+    })
+    return Array.from(names).sort((a, b) => a.localeCompare(b))
+  }, [selectedMemberReports])
+  const handleMemberRowClick = (memberId: string) => {
+    setSelectedMemberId(prev => (prev === memberId ? null : memberId))
+  }
+
+  const handleDownloadPdf = async () => {
+    const snapshot = await captureSummarySnapshot()
+    if (!snapshot) return
+
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    const canvasWidth = snapshot.canvas.width;
+    const canvasHeight = snapshot.canvas.height;
+    const ratio = canvasWidth / pdfWidth;
+    const imgHeight = canvasHeight / ratio;
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(snapshot.imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+    heightLeft -= pdfHeight;
+
+    while (heightLeft > 0) {
+      position -= pdfHeight;
+      pdf.addPage();
+      pdf.addImage(snapshot.imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+      heightLeft -= pdfHeight;
+    }
+    pdf.save(`Daily_AI_Concise_Summary_${selectedDate}.pdf`);
   };
 
-  const parseAiSummaryForBarCharts = (summary: string | null): AiSummaryChartData | null => {
-    if (!summary) return null
+  const handleDownloadPpt = async () => {
+    const snapshot = await captureSummarySnapshot()
+    if (!snapshot) return
 
-    const barData: Array<{ name: string; yes: number; no: number; }> = []
-    const individualBarData: { [key: string]: Array<{ name: string; value: number; color: string; }> } = {};
-    const regex = /For "([^"]+)": (\d+) reports answered 'yes' and (\d+) reports answered 'no'/gi
-    let match
+    const { default: PptxGenJS } = await import('pptxgenjs')
+    const pptx = new PptxGenJS()
+    const slide = pptx.addSlide()
+    const slideWidth = pptx.presLayout.width
+    const slideHeight = pptx.presLayout.height
 
-    while ((match = regex.exec(summary)) !== null) {
-      const question = match[1].replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-      const yesCount = parseInt(match[2], 10);
-      const noCount = parseInt(match[3], 10);
-      barData.push({ name: question, yes: yesCount, no: noCount });
-      individualBarData[question] = [
-        { name: 'Yes', value: yesCount, color: '#22c55e' },
-        { name: 'No', value: noCount, color: '#ef4444' },
-      ];
-    }
-
-    if (barData.length === 0) return null;
-
-    return { barData, individualBarData };
-  };
+    slide.addImage({ data: snapshot.imgData, x: 0, y: 0, w: slideWidth, h: slideHeight })
+    await pptx.writeFile({ fileName: `Daily_AI_Concise_Summary_${selectedDate}.pptx` })
+  }
 
   const summaryReportPieData = useMemo(() => {
     if (!reportSummary) return []
@@ -159,10 +643,6 @@ export default function DailyReportsPage() {
   const hasStatusData = statusPieDataFiltered.length > 0
 
   useEffect(() => {
-    setAiSummaryChartData(parseAiSummaryForBarCharts(dailyAiSummary));
-  }, [dailyAiSummary])
-
-  useEffect(() => {
     if (selectedReport) {
       setImageLoadingStates({})
       setImageErrorStates({})
@@ -176,6 +656,23 @@ export default function DailyReportsPage() {
     setImageLoadingStates({})
     setImageErrorStates({})
   }, [selectedReport])
+
+  useEffect(() => {
+    if (!selectedMemberId) return
+    const hasMember = reports.some(report => getReportMemberKey(report) === selectedMemberId)
+    if (!hasMember) {
+      setSelectedMemberId(null)
+    }
+  }, [reports, selectedMemberId])
+
+  useEffect(() => {
+    if (swachFeederFilter !== 'all' && !swachFilterOptions.feeders.includes(swachFeederFilter)) {
+      setSwachFeederFilter('all')
+    }
+    if (swachTripFilter !== 'all' && !swachFilterOptions.trips.includes(swachTripFilter)) {
+      setSwachTripFilter('all')
+    }
+  }, [swachFilterOptions, swachFeederFilter, swachTripFilter])
 
   useEffect(() => {
     setLoading(true)
@@ -649,12 +1146,23 @@ export default function DailyReportsPage() {
           {dailyAiSummary && selectedAnalysisType === 'summary' && (
             <div ref={summaryRef} className="bg-gray-50 rounded-lg p-4">
               <h4 className="text-md font-semibold text-gray-900 mb-2">Concise Summary:</h4>
-              <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
-                {dailyAiSummary}
-              </pre>
+              {conciseSummaryPoints.length > 0 ? (
+                <ul className="space-y-3 text-sm text-gray-800">
+                  {conciseSummaryPoints.map((point, index) => (
+                    <li key={`${point}-${index}`} className="flex items-start space-x-2">
+                      <Bot className="h-4 w-4 mt-0.5 text-gray-500" />
+                      <span>{point}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
+                  {dailyAiSummary}
+                </pre>
+              )}
               {reportSummary && summaryReportPieData.length > 0 && (
                 <div className="mt-6">
-                  <h4 className="text-md font-semibold text-gray-900 mb-2">Report Status Breakdown:</h4>
+                  <h4 className="text-md font-semibold text-gray-900 mb-2">Report Breakdown:</h4>
                   <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
                     <StatusPieChart data={summaryReportPieData} />
                     <div className="space-y-4">
@@ -674,33 +1182,251 @@ export default function DailyReportsPage() {
                   </div>
                 </div>
               )}
-              {aiSummaryChartData && (
+              {questionBreakdowns.length > 0 && (
                 <div className="mt-6">
-                  <h4 className="text-md font-semibold text-gray-900 mb-2">AI Analysis Breakdown:</h4>
-                  <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
-                    <SummaryTrendChart data={aiSummaryChartData.barData} />
-                  </div>
-                  <div className="mt-8 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {Object.entries(aiSummaryChartData.individualBarData).map(([question, data]) => (
-                      <div key={question} className="p-4 border rounded-lg">
-                        <h5 className="text-sm font-semibold text-gray-900 mb-2 text-center">{question}</h5>
-                        <SimpleBarChart data={data} />
-                      </div>
-                    ))}
+                  <h4 className="text-md font-semibold text-gray-900 mb-2">AI Compliance Snapshot:</h4>
+                  <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {questionBreakdowns.map((breakdown) => {
+                      const Icon = breakdown.icon
+                      return (
+                        <div key={`ai-breakdown-${breakdown.id}`} className="rounded-lg border border-gray-100 bg-white/60 p-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                              <span className="rounded-full bg-gray-100 p-2 text-gray-700">
+                                <Icon className="h-4 w-4" />
+                              </span>
+                              <div>
+                                <p className="text-sm font-semibold text-gray-900">{breakdown.label}</p>
+                                <p className="text-xs text-gray-500">{breakdown.totalResponses} responses</p>
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-gray-500">
+                              <p className="font-semibold text-emerald-600">
+                                Yes: {breakdown.yesCount}
+                              </p>
+                              <p className="font-semibold text-rose-600">
+                                No: {breakdown.noCount}
+                              </p>
+                            </div>
+                          </div>
+                          {breakdown.id === SWACH_QUESTION_ID && (
+                            <div className="mt-3 grid grid-cols-1 gap-3 text-xs text-gray-600 sm:grid-cols-3">
+                              <label className="flex flex-col space-y-1">
+                                <span className="font-semibold text-gray-700">Feeder Point</span>
+                                <select
+                                  value={swachFeederFilter}
+                                  onChange={(event) => setSwachFeederFilter(event.target.value)}
+                                  className="rounded border border-gray-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                >
+                                  <option value="all">All feeder points</option>
+                                  {swachFilterOptions.feeders.map(feeder => (
+                                    <option key={`swach-filter-${feeder}`} value={feeder}>
+                                      {feeder}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="flex flex-col space-y-1">
+                                <span className="font-semibold text-gray-700">Trip</span>
+                                <select
+                                  value={swachTripFilter === 'all' ? 'all' : swachTripFilter.toString()}
+                                  onChange={(event) =>
+                                    setSwachTripFilter(
+                                      event.target.value === 'all'
+                                        ? 'all'
+                                        : (Number(event.target.value) as ComplianceReport['tripNumber'])
+                                    )
+                                  }
+                                  className="rounded border border-gray-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                >
+                                  <option value="all">All trips</option>
+                                  {swachFilterOptions.trips.map(trip => (
+                                    <option key={`swach-trip-${trip}`} value={trip}>
+                                      Trip {trip}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <p className="self-end text-[11px] text-gray-500">
+                                Date filter from the page header already applies to this chart.
+                              </p>
+                            </div>
+                          )}
+                          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <QuestionPieChart data={breakdown.answers} />
+                            <SimpleBarChart data={breakdown.answers} xLabel="Answer Options" yLabel="Responses" />
+                          </div>
+                          <ul className="mt-4 space-y-1 text-xs text-gray-600">
+                            {breakdown.answers.map(answer => (
+                              <li key={`${breakdown.id}-ai-${answer.normalized}`} className="flex items-center justify-between">
+                                <span className="flex items-center space-x-2">
+                                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: answer.color }}></span>
+                                  <span>{answer.label}</span>
+                                </span>
+                                <span className="font-semibold text-gray-900">{answer.value}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
-              <button
-                onClick={handleDownloadPdf}
-                className="w-full btn-secondary flex items-center justify-center space-x-2 mt-4"
-              >
-                <Download className="h-4 w-4" />
-                <span>Download Concise AI Summary as PDF</span>
-              </button>
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  onClick={handleDownloadPdf}
+                  className="btn-secondary flex items-center justify-center space-x-2"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Download as PDF</span>
+                </button>
+                <button
+                  onClick={handleDownloadPpt}
+                  className="btn-secondary flex items-center justify-center space-x-2"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Download as PPT</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
       </div>
+
+      {memberQuestionStats.length > 0 && (
+        <div className="card">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Taskforce Member Responses</h3>
+              <p className="text-sm text-gray-500">
+                Aggregated answers for critical compliance questions captured in today&apos;s reports.
+              </p>
+            </div>
+            <span className="text-sm font-medium text-gray-500">
+              {memberQuestionStats.length} member{memberQuestionStats.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-left text-xs">
+              <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="whitespace-nowrap p-3 font-semibold text-gray-600">Member</th>
+                  {MEMBER_QUESTION_CONFIG.map(question => (
+                    <th key={question.id} className="whitespace-nowrap p-3 font-semibold text-gray-600">
+                      {question.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {memberQuestionStats.map(member => {
+                  const isSelected = selectedMemberId === member.memberId
+                  return (
+                  <tr
+                    key={member.memberId}
+                    className={`align-top transition ${isSelected ? 'bg-blue-50/70 ring-1 ring-blue-200' : 'hover:bg-gray-50'} cursor-pointer`}
+                    onClick={() => handleMemberRowClick(member.memberId)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        handleMemberRowClick(member.memberId)
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={isSelected}
+                  >
+                    <td className="p-3 align-top">
+                      <div className="font-semibold text-gray-900">{member.memberName}</div>
+                      {member.teamName && (
+                        <p className="text-[11px] text-gray-500">{member.teamName}</p>
+                      )}
+                      <p className="text-[11px] text-gray-400">
+                        {member.totalReports} report{member.totalReports === 1 ? '' : 's'}
+                      </p>
+                    </td>
+                    {MEMBER_QUESTION_CONFIG.map(question => (
+                      <td key={`${member.memberId}-${question.id}`} className="p-3 align-top">
+                        <MemberAnswerCell answers={member.answers[question.id]} />
+                      </td>
+                    ))}
+                  </tr>
+                )})}
+              </tbody>
+            </table>
+          </div>
+          {selectedMember && (
+            <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50/80 p-4">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h4 className="text-md font-semibold text-gray-900">Selected Member: {selectedMember.memberName}</h4>
+                  <p className="text-sm text-gray-500">
+                    Showing {selectedMemberReports.length} report{selectedMemberReports.length === 1 ? '' : 's'} within the current date filter.
+                  </p>
+                </div>
+                <button
+                  className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                  onClick={() => setSelectedMemberId(null)}
+                >
+                  Clear selection
+                </button>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <div className="rounded-lg border border-white/60 bg-white p-4">
+                  <h5 className="text-sm font-semibold text-gray-900">Feeder Points</h5>
+                  {selectedMemberFeederPoints.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-xs text-gray-600">
+                      {selectedMemberFeederPoints.map(point => (
+                        <li key={`${selectedMember.memberId}-${point}`} className="flex items-center space-x-2">
+                          <span className="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                          <span className="truncate">{point}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-xs text-gray-500">No feeder points recorded.</p>
+                  )}
+                </div>
+                <div className="lg:col-span-2">
+                  {selectedMemberReports.length > 0 ? (
+                    <div className="overflow-x-auto rounded-lg border border-white/60 bg-white">
+                      <table className="min-w-full divide-y divide-gray-200 text-left text-xs">
+                        <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
+                          <tr>
+                            <th className="px-3 py-2 font-semibold text-gray-600">Date</th>
+                            <th className="px-3 py-2 font-semibold text-gray-600">Feeder Point</th>
+                            <th className="px-3 py-2 font-semibold text-gray-600">Status</th>
+                            <th className="px-3 py-2 font-semibold text-gray-600">Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {selectedMemberReports.map(report => (
+                            <tr key={`member-report-${report.id}`} className="bg-white">
+                              <td className="px-3 py-2 text-gray-700">{formatReportDate(report)}</td>
+                              <td className="px-3 py-2 text-gray-900">{report.feederPointName || '—'}</td>
+                              <td className="px-3 py-2">
+                                <span className={`px-2 py-1 text-xs font-semibold ${getStatusColor(report.status)}`}>
+                                  {report.status.replace('_', ' ').toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-gray-600">
+                                {report.description ? report.description.slice(0, 80) + (report.description.length > 80 ? '…' : '') : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500">No reports available for the selected member.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Reports List */}
       <div className="space-y-4">
