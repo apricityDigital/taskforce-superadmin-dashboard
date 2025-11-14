@@ -99,6 +99,7 @@ registerQuestionMetadata(['Q12', 'q12', 'q12_overall_score', 'overall_score', 'o
 interface QuestionAnswerAggregate {
   normalized: string;
   label: string;
+  name: string;
   value: number;
   color: string;
 }
@@ -433,6 +434,7 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
     const answers = sortedAnswers.map((entry, index) => ({
       normalized: entry.normalized,
       label: entry.label,
+      name: entry.label,
       value: entry.count,
       color: getAnswerColor(entry.normalized, index),
     }))
