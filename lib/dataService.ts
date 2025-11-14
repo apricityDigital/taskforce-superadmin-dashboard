@@ -69,6 +69,7 @@ export interface ComplianceReport {
 }
 
 export interface ComplianceAnswer {
+  description: string;
   questionId: string;
   answer: 'yes' | 'no' | string;
   photos?: string[]; // Array of photo URLs
