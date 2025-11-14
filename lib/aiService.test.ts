@@ -19,37 +19,35 @@ describe('AIService', () => {
     rawReports: [],
   };
 
+  const mockFetch = jest.fn();
+
   beforeEach(() => {
     jest.resetModules();
+    mockFetch.mockReset();
+    (global as any).fetch = mockFetch;
   });
 
-  it('should generate analysis using the Gemini API', async () => {
-    process.env.NEXT_PUBLIC_GEMINI_API_KEY = 'test-key';
-    const mockGenerateContent = jest.fn().mockResolvedValue({ response: { text: () => 'summary' } });
-    const mockGetGenerativeModel = jest.fn(() => ({ generateContent: mockGenerateContent }));
-    jest.mock('@google/generative-ai', () => ({
-      GoogleGenerativeAI: jest.fn().mockImplementation(() => ({
-        getGenerativeModel: mockGetGenerativeModel,
-      })),
-    }));
+  it('should generate analysis using the API route when fetch succeeds', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ detailed: 'Detailed report', summary: 'Quick summary' }),
+    });
 
     const { AIService } = await import('./aiService');
     const result = await AIService.generateAnalysis(mockReportData);
 
-    expect(mockGetGenerativeModel).toHaveBeenCalledWith({ model: 'gemini-pro' });
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ detailed: 'summary', summary: 'summary' });
+    expect(mockFetch).toHaveBeenCalledWith('/api/generate-summary', expect.objectContaining({
+      method: 'POST',
+    }));
+    expect(result).toEqual({ detailed: 'Detailed report', summary: 'Quick summary' });
   });
 
-  it('should fall back to simulation when Gemini API fails', async () => {
-    process.env.NEXT_PUBLIC_GEMINI_API_KEY = 'test-key';
-    const mockGenerateContent = jest.fn().mockRejectedValue(new Error('API Error'));
-    const mockGetGenerativeModel = jest.fn(() => ({ generateContent: mockGenerateContent }));
-    jest.mock('@google/generative-ai', () => ({
-      GoogleGenerativeAI: jest.fn().mockImplementation(() => ({
-        getGenerativeModel: mockGetGenerativeModel,
-      })),
-    }));
+  it('should fall back to simulation when the API returns an error response', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'Server Error' }),
+    });
 
     const { AIService } = await import('./aiService');
     const result = await AIService.generateAnalysis(mockReportData);
@@ -57,8 +55,8 @@ describe('AIService', () => {
     expect(result.summary).toContain('Numerical Summary of Key Questions:');
   });
 
-  it('should use simulation if no API key is provided', async () => {
-    delete process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  it('should fall back to simulation when fetch throws', async () => {
+    mockFetch.mockRejectedValue(new Error('Network error'));
 
     const { AIService } = await import('./aiService');
     const result = await AIService.generateAnalysis(mockReportData);

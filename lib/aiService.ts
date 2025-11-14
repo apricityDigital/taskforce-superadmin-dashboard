@@ -1,4 +1,4 @@
-// AI Service for Gemini Integration
+// AI Service for GPT Integration
 // This service handles AI analysis of daily reports
 
 import { ComplianceReport } from './dataService';
@@ -43,7 +43,7 @@ export class AIService {
       return await response.json();
 
     } catch (error) {
-      console.error('❌ Error calling /api/generate-summary:', error);
+            console.error('Error calling /api/generate-summary:', error);
       // Fallback to simulation
       return this.simulateAnalysis(reportData);
     }

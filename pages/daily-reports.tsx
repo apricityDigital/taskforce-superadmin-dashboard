@@ -1277,6 +1277,7 @@ export default function DailyReportsPage() {
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {questionBreakdowns.map((breakdown) => {
                       const Icon = breakdown.icon
+                      const showBinaryCounts = breakdown.yesCount > 0 || breakdown.noCount > 0
                       return (
                         <div key={`ai-breakdown-${breakdown.id}`} className="rounded-lg border border-gray-100 bg-white/60 p-4">
                           <div className="flex items-center justify-between">
@@ -1289,14 +1290,16 @@ export default function DailyReportsPage() {
                                 <p className="text-xs text-gray-500">{breakdown.totalResponses} responses</p>
                               </div>
                             </div>
-                            <div className="text-right text-xs text-gray-500">
-                              <p className="font-semibold text-emerald-600">
-                                Yes: {breakdown.yesCount}
-                              </p>
-                              <p className="font-semibold text-rose-600">
-                                No: {breakdown.noCount}
-                              </p>
-                            </div>
+                            {showBinaryCounts && (
+                              <div className="text-right text-xs text-gray-500">
+                                <p className="font-semibold text-emerald-600">
+                                  Yes: {breakdown.yesCount}
+                                </p>
+                                <p className="font-semibold text-rose-600">
+                                  No: {breakdown.noCount}
+                                </p>
+                              </div>
+                            )}
                           </div>
                           {breakdown.id === SWACH_QUESTION_ID && (
                             <div className="mt-3 grid grid-cols-1 gap-3 text-xs text-gray-600 sm:grid-cols-2 md:grid-cols-4 ">

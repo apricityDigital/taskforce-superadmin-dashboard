@@ -1,16 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import { DailyReportData, AIService } from '@/lib/aiService';
 
 // This is the server-side API route.
 // It is secure to use the API key here.
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
-if (!GEMINI_API_KEY) {
-  console.warn('GEMINI_API_KEY environment variable is not set.');
+if (!OPENAI_API_KEY) {
+  console.warn('OPENAI_API_KEY environment variable is not set.');
 }
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 export default async function handler(
   req: NextApiRequest,
@@ -26,6 +26,10 @@ export default async function handler(
     return res.status(400).json({ error: 'Bad Request: Missing report data.' });
   }
 
+  if (!openai) {
+    return res.status(500).json({ error: 'OpenAI API key not configured.' });
+  }
+
   try {
     // We can re-use the prompt building logic from the AIService
     // @ts-ignore - Accessing private static methods for reuse
@@ -33,20 +37,24 @@ export default async function handler(
     // @ts-ignore
     const concisePrompt = AIService.buildConcisePrompt(reportData);
 
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-
     const [detailedResult, summaryResult] = await Promise.all([
-      model.generateContent(detailedPrompt),
-      model.generateContent(concisePrompt)
+      openai.responses.create({
+        model: 'gpt-4o-mini',
+        input: detailedPrompt,
+      }),
+      openai.responses.create({
+        model: 'gpt-4o-mini',
+        input: concisePrompt,
+      })
     ]);
 
-    const detailed = detailedResult.response.text();
-    const summary = summaryResult.response.text();
+    const detailed = (detailedResult.output_text || '').trim();
+    const summary = (summaryResult.output_text || '').trim();
 
     res.status(200).json({ detailed, summary });
 
   } catch (error) {
-    console.error('Error calling Gemini API in /api/generate-summary:', error);
+    console.error('Error calling OpenAI API in /api/generate-summary:', error);
     res.status(500).json({ error: 'Failed to generate AI summary.' });
   }
 }
