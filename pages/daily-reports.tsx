@@ -64,6 +64,7 @@ const YES_ANSWER_VALUES = new Set(['yes', 'y', 'true', '✔️', '✅'])
 const NO_ANSWER_VALUES = new Set(['no', 'n', 'false', '❌', '✖️'])
 const HIDDEN_QUESTION_CHART_IDS = new Set(['visible_signboard', 'overall_compliance_rating'])
 const SWACH_QUESTION_ID = 'swatch_workers_count'
+const SWACH_TRIP_UNKNOWN_KEY = '__swach_trip_unknown__'
 
 const QUESTION_METADATA: Record<string, { label: string; icon: LucideIcon }> = {}
 
@@ -384,6 +385,75 @@ function MemberAnswerCell({ answers }: { answers?: MemberQuestionAnswerCount[] }
   )
 }
 
+const reportHasSwachAnswer = (report: ComplianceReport) => {
+  return (
+    report.answers?.some(answer => {
+      if (!answer.questionId) return false
+      const questionSlug = slugifyQuestionId(answer.questionId)
+      const canonicalId = MEMBER_QUESTION_ALIAS_MAP.get(questionSlug)
+      return canonicalId === SWACH_QUESTION_ID
+    }) ?? false
+  )
+}
+
+const getTripKey = (tripNumber: ComplianceReport['tripNumber']) => {
+  if (tripNumber === null || tripNumber === undefined) {
+    return SWACH_TRIP_UNKNOWN_KEY
+  }
+  const normalized = `${tripNumber}`.trim()
+  return normalized || SWACH_TRIP_UNKNOWN_KEY
+}
+
+const getTripLabel = (tripKey: string) => {
+  return tripKey === SWACH_TRIP_UNKNOWN_KEY ? 'Unspecified Trip' : `Trip ${tripKey}`
+}
+
+const buildSwachExcelRows = (reports: ComplianceReport[]): Array<Record<string, string | number>> => {
+  if (!reports?.length) return []
+
+  const feederMap = new Map<string, Map<string, number>>()
+  const tripKeys = new Set<string>()
+
+  reports.forEach(report => {
+    if (!reportHasSwachAnswer(report)) return
+
+    const feederName = report.feederPointName?.trim() || 'Unknown Feeder Point'
+    const tripKey = getTripKey(report.tripNumber)
+
+    tripKeys.add(tripKey)
+
+    if (!feederMap.has(feederName)) {
+      feederMap.set(feederName, new Map())
+    }
+
+    const tripCounts = feederMap.get(feederName)!
+    tripCounts.set(tripKey, (tripCounts.get(tripKey) || 0) + 1)
+  })
+
+  if (!feederMap.size) {
+    return []
+  }
+
+  const sortedTripKeys = Array.from(tripKeys).sort((a, b) => {
+    if (a === SWACH_TRIP_UNKNOWN_KEY) return 1
+    if (b === SWACH_TRIP_UNKNOWN_KEY) return -1
+    return Number(a) - Number(b)
+  })
+
+  return Array.from(feederMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([feederName, tripCounts]) => {
+      const row: Record<string, string | number> = { 'Feeder Point': feederName }
+      sortedTripKeys.forEach(tripKey => {
+        row[getTripLabel(tripKey)] = tripCounts.get(tripKey) ?? 0
+      })
+      if (!sortedTripKeys.length) {
+        row['Unspecified Trip'] = tripCounts.get(SWACH_TRIP_UNKNOWN_KEY) ?? 0
+      }
+      return row
+    })
+}
+
 const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown[] => {
   if (!reports?.length) return []
 
@@ -535,6 +605,7 @@ export default function DailyReportsPage() {
       answers: [],
     }
   }, [filteredSwachReports, swachFeederFilter, swachTripFilter])
+  const swachExcelRows = useMemo(() => buildSwachExcelRows(filteredSwachReports), [filteredSwachReports])
   const questionBreakdowns = useMemo(() => {
     const patched = baseQuestionBreakdowns.map(breakdown => {
       if (breakdown.id === SWACH_QUESTION_ID && swachFilteredBreakdown) {
@@ -614,6 +685,22 @@ export default function DailyReportsPage() {
 
     slide.addImage({ data: snapshot.imgData, x: 0, y: 0, w: slideWidth, h: slideHeight })
     await pptx.writeFile({ fileName: `Daily_AI_Concise_Summary_${selectedDate}.pptx` })
+  }
+
+  const handleDownloadSwachExcel = async () => {
+    if (!swachExcelRows.length) return
+
+    const XLSX = await import('xlsx')
+    const worksheet = XLSX.utils.json_to_sheet(swachExcelRows)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Swach Workers')
+
+    const rangeLabel = useCustomRange ? `${startDate}_to_${endDate}` : selectedDate
+    const sanitizedRange = rangeLabel.replace(/[^a-zA-Z0-9_-]/g, '')
+    const feederSuffix =
+      swachFeederFilter !== 'all' ? `_${slugifyQuestionId(swachFeederFilter)}` : ''
+
+    XLSX.writeFile(workbook, `swach-workers-${sanitizedRange || 'report'}${feederSuffix}.xlsx`)
   }
 
   const summaryReportPieData = useMemo(() => {
@@ -1212,7 +1299,7 @@ export default function DailyReportsPage() {
                             </div>
                           </div>
                           {breakdown.id === SWACH_QUESTION_ID && (
-                            <div className="mt-3 grid grid-cols-1 gap-3 text-xs text-gray-600 sm:grid-cols-3">
+                            <div className="mt-3 grid grid-cols-1 gap-3 text-xs text-gray-600 sm:grid-cols-2 md:grid-cols-4 ">
                               <label className="flex flex-col space-y-1">
                                 <span className="font-semibold text-gray-700">Feeder Point</span>
                                 <select
@@ -1249,9 +1336,7 @@ export default function DailyReportsPage() {
                                   ))}
                                 </select>
                               </label>
-                              <p className="self-end text-[11px] text-gray-500">
-                                Date filter from the page header already applies to this chart.
-                              </p>
+                             
                             </div>
                           )}
                           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1269,6 +1354,22 @@ export default function DailyReportsPage() {
                               </li>
                             ))}
                           </ul>
+                          {breakdown.id === SWACH_QUESTION_ID && (
+                            <div className="mt-5 flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50/80 p-4 text-xs text-gray-600 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="text-sm font-semibold text-gray-900">Download Swach Excel report</p>
+                                <p>Exports feeder point and trip counts for the filters above.</p>
+                              </div>
+                              <button
+                                onClick={handleDownloadSwachExcel}
+                                disabled={!swachExcelRows.length}
+                                className="btn-secondary inline-flex items-center justify-center space-x-2 px-4 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                <span>Download (.xlsx)</span>
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )
                     })}
