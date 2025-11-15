@@ -261,6 +261,34 @@ const slugifyQuestionId = (value: string) => {
     .replace(/^_+|_+$/g, '')
 }
 
+const sanitizeFilenameSegment = (value: string, fallback = 'value') => {
+  if (!value) return fallback
+  const sanitized = value
+    .toString()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+  return sanitized || fallback
+}
+
+const ZONE_QUESTION_KEYS = ['Q1', 'q1', 'q1_zone_name', 'zone_name']
+const ZONE_QUESTION_SLUGS = new Set(
+  ZONE_QUESTION_KEYS.map(key => slugifyQuestionId(key)).filter((key): key is string => Boolean(key))
+)
+
+const getReportZoneInfo = (report: ComplianceReport) => {
+  if (!report.answers?.length) return null
+  const zoneAnswer = report.answers.find(answer => {
+    if (!answer.questionId) return false
+    const slug = slugifyQuestionId(answer.questionId)
+    return ZONE_QUESTION_SLUGS.has(slug)
+  })
+  if (!zoneAnswer) return null
+  const normalized = normalizeAnswerValue(zoneAnswer.answer)
+  const label = formatAnswerDisplay(zoneAnswer.answer, normalized)
+  return { normalized, label }
+}
+
 const MEMBER_QUESTION_ALIAS_MAP = new Map<string, string>()
 MEMBER_QUESTION_CONFIG.forEach(question => {
   const keys = [question.id, ...(question.aliases ?? [])]
@@ -532,6 +560,8 @@ export default function DailyReportsPage() {
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
   const [filterStatus, setFilterStatus] = useState<ComplianceReport['status'] | 'all'>('all')
+  const [zoneFilter, setZoneFilter] = useState<'all' | string>('all')
+  const [zoneOptions, setZoneOptions] = useState<Array<{ value: string; label: string }>>([])
   const [generatingAI, setGeneratingAI] = useState(false)
   const [selectedReport, setSelectedReport] = useState<ComplianceReport | null>(null)
   const [adminNotes, setAdminNotes] = useState('')
@@ -550,6 +580,20 @@ export default function DailyReportsPage() {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [swachFeederFilter, setSwachFeederFilter] = useState<'all' | string>('all')
   const [swachTripFilter, setSwachTripFilter] = useState<'all' | ComplianceReport['tripNumber']>('all')
+  const dateRangeLabel = useMemo(() => {
+    if (useCustomRange && startDate && endDate) {
+      const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
+      return sanitizeFilenameSegment(`${rangeStart}_to_${rangeEnd}`, selectedDate)
+    }
+    return sanitizeFilenameSegment(selectedDate, selectedDate)
+  }, [useCustomRange, startDate, endDate, selectedDate])
+  const zoneLabelForFilename = useMemo(() => {
+    if (zoneFilter === 'all') {
+      return 'All_Zones'
+    }
+    const option = zoneOptions.find(option => option.value === zoneFilter)
+    return sanitizeFilenameSegment(option?.label || zoneFilter, 'Zone')
+  }, [zoneFilter, zoneOptions])
   const captureSummarySnapshot = async () => {
     if (!summaryRef.current) return null
     const scale = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2
@@ -560,6 +604,28 @@ export default function DailyReportsPage() {
     })
     const imgData = canvas.toDataURL('image/png')
     return { canvas, imgData }
+  }
+  const captureSummarySections = async () => {
+    if (!summaryRef.current) return []
+    const targets = summaryRef.current.querySelectorAll<HTMLElement>('[data-pdf-section]')
+    const elements = targets.length ? Array.from(targets) : [summaryRef.current]
+    const scale = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2
+    const snapshots: Array<{ imgData: string; width: number; height: number }> = []
+
+    for (const element of elements) {
+      const canvas = await html2canvas(element, {
+        scale,
+        scrollY: typeof window !== 'undefined' ? -window.scrollY : 0,
+        backgroundColor: '#ffffff'
+      })
+      snapshots.push({
+        imgData: canvas.toDataURL('image/png'),
+        width: canvas.width,
+        height: canvas.height,
+      })
+    }
+
+    return snapshots
   }
 
   const conciseSummaryPoints = useMemo(() => buildSummaryPoints(dailyAiSummary), [dailyAiSummary])
@@ -648,29 +714,48 @@ export default function DailyReportsPage() {
   }
 
   const handleDownloadPdf = async () => {
-    const snapshot = await captureSummarySnapshot()
-    if (!snapshot) return
+    const sections = await captureSummarySections()
+    if (!sections.length) return
 
     const pdf = new jsPDF('p', 'mm', 'a4');
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
-    const canvasWidth = snapshot.canvas.width;
-    const canvasHeight = snapshot.canvas.height;
-    const ratio = canvasWidth / pdfWidth;
-    const imgHeight = canvasHeight / ratio;
-    let heightLeft = imgHeight;
-    let position = 0;
+    const marginX = 10;
+    const marginY = 10;
+    const contentWidth = pdfWidth - marginX * 2;
+    const contentHeight = pdfHeight - marginY * 2;
+    const sectionSpacing = 6;
+    let currentY = 0;
 
-    pdf.addImage(snapshot.imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-    heightLeft -= pdfHeight;
+    sections.forEach((section, index) => {
+      let renderWidth = contentWidth;
+      let renderHeight = (section.height * renderWidth) / section.width;
 
-    while (heightLeft > 0) {
-      position -= pdfHeight;
-      pdf.addPage();
-      pdf.addImage(snapshot.imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-      heightLeft -= pdfHeight;
-    }
-    pdf.save(`Daily_AI_Concise_Summary_${selectedDate}.pdf`);
+      if (renderHeight > contentHeight) {
+        const scaleFactor = contentHeight / renderHeight;
+        renderWidth *= scaleFactor;
+        renderHeight = contentHeight;
+      }
+
+      if (currentY > 0 && currentY + renderHeight > contentHeight) {
+        pdf.addPage();
+        currentY = 0;
+      }
+
+      const xPosition = marginX + (contentWidth - renderWidth) / 2;
+      const yPosition = marginY + currentY;
+
+      pdf.addImage(section.imgData, 'PNG', xPosition, yPosition, renderWidth, renderHeight);
+
+      currentY += renderHeight + sectionSpacing;
+
+      if (index < sections.length - 1 && currentY > contentHeight) {
+        pdf.addPage();
+        currentY = 0;
+      }
+    });
+
+    pdf.save(`Daily_AI_Concise_Summary_${dateRangeLabel}_${zoneLabelForFilename}.pdf`);
   };
 
   const handleDownloadPpt = async () => {
@@ -684,7 +769,7 @@ export default function DailyReportsPage() {
     const slideHeight = pptx.presLayout.height
 
     slide.addImage({ data: snapshot.imgData, x: 0, y: 0, w: slideWidth, h: slideHeight })
-    await pptx.writeFile({ fileName: `Daily_AI_Concise_Summary_${selectedDate}.pptx` })
+    await pptx.writeFile({ fileName: `Daily_AI_Concise_Summary_${dateRangeLabel}_${zoneLabelForFilename}.pptx` })
   }
 
   const handleDownloadSwachExcel = async () => {
@@ -695,12 +780,11 @@ export default function DailyReportsPage() {
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Swach Workers')
 
-    const rangeLabel = useCustomRange ? `${startDate}_to_${endDate}` : selectedDate
-    const sanitizedRange = rangeLabel.replace(/[^a-zA-Z0-9_-]/g, '')
     const feederSuffix =
       swachFeederFilter !== 'all' ? `_${slugifyQuestionId(swachFeederFilter)}` : ''
+    const zoneSuffix = zoneLabelForFilename ? `_${zoneLabelForFilename}` : ''
 
-    XLSX.writeFile(workbook, `swach-workers-${sanitizedRange || 'report'}${feederSuffix}.xlsx`)
+    XLSX.writeFile(workbook, `swach-workers-${dateRangeLabel || 'report'}${feederSuffix}${zoneSuffix}.xlsx`)
   }
 
   const summaryReportPieData = useMemo(() => {
@@ -764,6 +848,12 @@ export default function DailyReportsPage() {
   }, [swachFilterOptions, swachFeederFilter, swachTripFilter])
 
   useEffect(() => {
+    if (zoneFilter !== 'all' && !zoneOptions.some(option => option.value === zoneFilter)) {
+      setZoneFilter('all')
+    }
+  }, [zoneOptions, zoneFilter])
+
+  useEffect(() => {
     setLoading(true)
     const unsubscribe = DataService.onComplianceReportsChange(allReports => {
       console.log("All Compliance Reports (real-time):", allReports)
@@ -777,9 +867,28 @@ export default function DailyReportsPage() {
         return reportDate === selectedDate
       })
 
+      const zoneMap = new Map<string, string>()
+      filteredReports.forEach(report => {
+        const zoneInfo = getReportZoneInfo(report)
+        if (zoneInfo && !zoneMap.has(zoneInfo.normalized)) {
+          zoneMap.set(zoneInfo.normalized, zoneInfo.label)
+        }
+      })
+      const zoneOptionList = Array.from(zoneMap.entries())
+        .map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label))
+      setZoneOptions(zoneOptionList)
+
       // Apply status filter
       if (filterStatus !== 'all') {
         filteredReports = filteredReports.filter(report => report.status === filterStatus)
+      }
+
+      if (zoneFilter !== 'all') {
+        filteredReports = filteredReports.filter(report => {
+          const zoneInfo = getReportZoneInfo(report)
+          return zoneInfo?.normalized === zoneFilter
+        })
       }
 
       console.log("Filtered Compliance Reports (real-time):", filteredReports)
@@ -799,7 +908,7 @@ export default function DailyReportsPage() {
     })
 
     return () => unsubscribe()
-  }, [selectedDate, filterStatus, useCustomRange, startDate, endDate]) // Add filterStatus to dependency array
+  }, [selectedDate, filterStatus, zoneFilter, useCustomRange, startDate, endDate]) // Add filterStatus to dependency array
 
   useEffect(() => {
     if (!useCustomRange) {
@@ -1120,6 +1229,21 @@ export default function DailyReportsPage() {
                 <option value="requires_action">Action Required</option>
               </select>
             </div>
+
+            <div className="relative">
+              <select
+                value={zoneFilter}
+                onChange={(e) => setZoneFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">All Zones</option>
+                {zoneOptions.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -1218,7 +1342,7 @@ export default function DailyReportsPage() {
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `Daily_AI_Detailed_Analysis_${selectedDate}.txt`;
+                    a.download = `Daily_AI_Detailed_Analysis_${dateRangeLabel}_${zoneLabelForFilename}.txt`;
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
@@ -1234,23 +1358,25 @@ export default function DailyReportsPage() {
           )}
           {dailyAiSummary && selectedAnalysisType === 'summary' && (
             <div ref={summaryRef} className="bg-gray-50 rounded-lg p-4">
-              <h4 className="text-md font-semibold text-gray-900 mb-2">Concise Summary:</h4>
-              {conciseSummaryPoints.length > 0 ? (
-                <ul className="space-y-3 text-sm text-gray-800">
-                  {conciseSummaryPoints.map((point, index) => (
-                    <li key={`${point}-${index}`} className="flex items-start space-x-2">
-                      <Bot className="h-4 w-4 mt-0.5 text-gray-500" />
-                      <span>{point}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
-                  {dailyAiSummary}
-                </pre>
-              )}
+              <div data-pdf-section="true">
+                <h4 className="text-md font-semibold text-gray-900 mb-2">Concise Summary:</h4>
+                {conciseSummaryPoints.length > 0 ? (
+                  <ul className="space-y-3 text-sm text-gray-800">
+                    {conciseSummaryPoints.map((point, index) => (
+                      <li key={`${point}-${index}`} className="flex items-start space-x-2">
+                        <Bot className="h-4 w-4 mt-0.5 text-gray-500" />
+                        <span>{point}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
+                    {dailyAiSummary}
+                  </pre>
+                )}
+              </div>
               {reportSummary && summaryReportPieData.length > 0 && (
-                <div className="mt-6">
+                <div data-pdf-section="true" className="mt-6">
                   <h4 className="text-md font-semibold text-gray-900 mb-2">Report Breakdown:</h4>
                   <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
                     <StatusPieChart data={summaryReportPieData} />
@@ -1272,7 +1398,7 @@ export default function DailyReportsPage() {
                 </div>
               )}
               {questionBreakdowns.length > 0 && (
-                <div className="mt-6">
+                <div data-pdf-section="true" className="mt-6">
                   <h4 className="text-md font-semibold text-gray-900 mb-2">AI Compliance Snapshot:</h4>
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {questionBreakdowns.map((breakdown) => {
