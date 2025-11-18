@@ -560,6 +560,7 @@ export default function DailyReportsPage() {
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
   const [filterStatus, setFilterStatus] = useState<ComplianceReport['status'] | 'all'>('all')
+  const [filterTrip, setFilterTrip] = useState<'all' | 1 | 2 | 3>('all')
   const [zoneFilter, setZoneFilter] = useState<'all' | string>('all')
   const [zoneOptions, setZoneOptions] = useState<Array<{ value: string; label: string }>>([])
   const [generatingAI, setGeneratingAI] = useState(false)
@@ -580,6 +581,7 @@ export default function DailyReportsPage() {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [swachFeederFilter, setSwachFeederFilter] = useState<'all' | string>('all')
   const [swachTripFilter, setSwachTripFilter] = useState<'all' | ComplianceReport['tripNumber']>('all')
+  
   const dateRangeLabel = useMemo(() => {
     if (useCustomRange && startDate && endDate) {
       const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
@@ -884,6 +886,11 @@ export default function DailyReportsPage() {
         filteredReports = filteredReports.filter(report => report.status === filterStatus)
       }
 
+      // Apply trip filter
+      if (filterTrip !== 'all') {
+        filteredReports = filteredReports.filter(report => report.tripNumber === filterTrip)
+      }
+
       if (zoneFilter !== 'all') {
         filteredReports = filteredReports.filter(report => {
           const zoneInfo = getReportZoneInfo(report)
@@ -908,7 +915,7 @@ export default function DailyReportsPage() {
     })
 
     return () => unsubscribe()
-  }, [selectedDate, filterStatus, zoneFilter, useCustomRange, startDate, endDate]) // Add filterStatus to dependency array
+  }, [selectedDate, filterStatus, filterTrip, zoneFilter, useCustomRange, startDate, endDate])
 
   useEffect(() => {
     if (!useCustomRange) {
@@ -1216,7 +1223,7 @@ export default function DailyReportsPage() {
               />
             )}
 
-            <div className="relative"> {/* Added wrapper div */}
+            <div className="relative">
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value as ComplianceReport['status'] | 'all')}
@@ -1232,6 +1239,19 @@ export default function DailyReportsPage() {
 
             <div className="relative">
               <select
+                value={filterTrip}
+                onChange={(e) => setFilterTrip(e.target.value === 'all' ? 'all' : Number(e.target.value) as 1 | 2 | 3)}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">All Trips</option>
+                <option value="1">Trip 1</option>
+                <option value="2">Trip 2</option>
+                <option value="3">Trip 3</option>
+              </select>
+            </div>
+
+           <div className="relative">
+              <select
                 value={zoneFilter}
                 onChange={(e) => setZoneFilter(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
@@ -1244,6 +1264,9 @@ export default function DailyReportsPage() {
                 ))}
               </select>
             </div>
+         
+            
+           
           </div>
         </div>
       </div>
