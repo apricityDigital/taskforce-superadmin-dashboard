@@ -32,6 +32,7 @@ export interface User {
   isActive: boolean;
   createdAt: any;
   lastLogin?: any;
+  password?: string;
 }
 
 export interface ComplianceReport {
@@ -608,6 +609,39 @@ export class DataService {
     return users;
   }
 
+  static async findUserByName(name: string): Promise<User | null> {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return null;
+    }
+
+    // Try exact, case-sensitive match first for efficiency
+    const exactQuery = query(
+      collection(db, 'approvedUsers'),
+      where('name', '==', trimmedName),
+      limit(1)
+    );
+    const exactSnapshot = await getDocs(exactQuery);
+    if (!exactSnapshot.empty) {
+      const userDoc = exactSnapshot.docs[0];
+      return { id: userDoc.id, ...userDoc.data() } as User;
+    }
+
+    // Fall back to case-insensitive search by scanning the collection
+    const normalizedTarget = trimmedName.toLowerCase();
+    const snapshot = await getDocs(collection(db, 'approvedUsers'));
+    const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+
+    const caseInsensitiveMatch = users.find(user => (user.name || '').trim().toLowerCase() === normalizedTarget);
+    if (caseInsensitiveMatch) {
+      return caseInsensitiveMatch;
+    }
+
+    // Allow partial (contains) match as a last resort
+    const partialMatch = users.find(user => (user.name || '').toLowerCase().includes(normalizedTarget));
+    return partialMatch ?? null;
+  }
+
   // Get all access requests
   static onAccessRequestsChange(callback: (requests: AccessRequest[]) => void) {
     const q = query(collection(db, 'accessRequests'), orderBy('createdAt', 'desc'));
@@ -877,6 +911,11 @@ export class DataService {
   static async updateUser(id: string, data: Partial<User>): Promise<void> {
     const userRef = doc(db, 'approvedUsers', id);
     await updateDoc(userRef, data);
+  }
+
+  static async updateUserPassword(id: string, password: string): Promise<void> {
+    const userRef = doc(db, 'approvedUsers', id);
+    await updateDoc(userRef, { password });
   }
 
   static async deleteUser(id: string): Promise<void> {
