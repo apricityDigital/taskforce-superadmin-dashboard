@@ -631,6 +631,65 @@ export default function DailyReportsPage() {
   }
 
   const conciseSummaryPoints = useMemo(() => buildSummaryPoints(dailyAiSummary), [dailyAiSummary])
+  const summaryFeederHighlights = useMemo(() => {
+    if (!dailyAiSummary || !reports.length) {
+      return []
+    }
+
+    const feederMap = new Map<
+      string,
+      {
+        feeder: string
+        zoneLabel: string
+        trips: Map<string, string>
+      }
+    >()
+
+    reports.forEach(report => {
+      const feederName = report.feederPointName?.trim() || 'Unknown Feeder Point'
+      const zoneInfo = getReportZoneInfo(report)
+      const zoneLabel = zoneInfo?.label || 'Zone Not Provided'
+      if (!feederMap.has(feederName)) {
+        feederMap.set(feederName, {
+          feeder: feederName,
+          zoneLabel,
+          trips: new Map<string, string>(),
+        })
+      } else if (zoneInfo?.label) {
+        const existing = feederMap.get(feederName)!
+        if (existing.zoneLabel === 'Zone Not Provided') {
+          existing.zoneLabel = zoneInfo.label
+        }
+      }
+
+      const detail = feederMap.get(feederName)!
+      const tripKey = getTripKey(report.tripNumber)
+      detail.trips.set(tripKey, getTripLabel(tripKey))
+    })
+
+    const sortTripKeys = (a: string, b: string) => {
+      if (a === SWACH_TRIP_UNKNOWN_KEY) return 1
+      if (b === SWACH_TRIP_UNKNOWN_KEY) return -1
+      const aNum = Number(a)
+      const bNum = Number(b)
+      if (Number.isNaN(aNum) && Number.isNaN(bNum)) {
+        return a.localeCompare(b)
+      }
+      if (Number.isNaN(aNum)) return 1
+      if (Number.isNaN(bNum)) return -1
+      return aNum - bNum
+    }
+
+    return Array.from(feederMap.values())
+      .map(detail => ({
+        feeder: detail.feeder,
+        zoneLabel: detail.zoneLabel,
+        trips: Array.from(detail.trips.entries())
+          .sort((a, b) => sortTripKeys(a[0], b[0]))
+          .map(([, label]) => label),
+      }))
+      .sort((a, b) => a.feeder.localeCompare(b.feeder))
+  }, [dailyAiSummary, reports])
   const swachFilterOptions = useMemo(() => {
     const feeders = new Set<string>()
     const trips = new Set<ComplianceReport['tripNumber']>()
@@ -1398,6 +1457,36 @@ export default function DailyReportsPage() {
                   </pre>
                 )}
               </div>
+              {summaryFeederHighlights.length > 0 && (
+                <div data-pdf-section="true" className="mt-6">
+                  <h4 className="text-md font-semibold text-gray-900 mb-4">Zone & Trip Coverage:</h4>
+                  <div className="space-y-4">
+                    {Object.entries(
+                      summaryFeederHighlights.reduce((acc, detail) => {
+                        const key = `Zone: ${detail.zoneLabel} | Trip ${detail.trips.join(', ')}`
+                        if (!acc[key]) {
+                          acc[key] = []
+                        }
+                        acc[key].push(detail.feeder)
+                        return acc
+                      }, {} as Record<string, string[]>)
+                    ).sort((a, b) => {
+                      const zoneA = parseInt(a[0].match(/Zone: (\d+)/)?.[1] || '0')
+                      const zoneB = parseInt(b[0].match(/Zone: (\d+)/)?.[1] || '0')
+                      return zoneA - zoneB
+                    }).map(([key, feeders]) => (
+                      <div key={key}>
+                        <p className="font-semibold text-gray-900 mb-2">{key}</p>
+                        <ul className="ml-4 space-y-1">
+                          {feeders.map((feeder, idx) => (
+                            <li key={`${key}-${idx}`} className="text-sm text-gray-700">• {feeder}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {reportSummary && summaryReportPieData.length > 0 && (
                 <div data-pdf-section="true" className="mt-6">
                   <h4 className="text-md font-semibold text-gray-900 mb-2">Report Breakdown:</h4>
@@ -1652,12 +1741,12 @@ export default function DailyReportsPage() {
                             <th className="px-3 py-2 font-semibold text-gray-600">Date</th>
                             <th className="px-3 py-2 font-semibold text-gray-600">Feeder Point</th>
                             <th className="px-3 py-2 font-semibold text-gray-600">Status</th>
-                            <th className="px-3 py-2 font-semibold text-gray-600">Notes</th>
+                            <th className="px-3 py-2 font-semibold text-gray-600">Action</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                           {selectedMemberReports.map(report => (
-                            <tr key={`member-report-${report.id}`} className="bg-white">
+                            <tr key={`member-report-${report.id}`} className="bg-white hover:bg-gray-50">
                               <td className="px-3 py-2 text-gray-700">{formatReportDate(report)}</td>
                               <td className="px-3 py-2 text-gray-900">{report.feederPointName || '—'}</td>
                               <td className="px-3 py-2">
@@ -1666,7 +1755,13 @@ export default function DailyReportsPage() {
                                 </span>
                               </td>
                               <td className="px-3 py-2 text-gray-600">
-                                {report.description ? report.description.slice(0, 80) + (report.description.length > 80 ? '…' : '') : '—'}
+                                <button 
+                                  onClick={() => setSelectedReport(report)}
+                                  className="text-blue-600 hover:text-blue-800 hover:bg-blue-50 p-2 rounded-lg transition-colors"
+                                  title="View Report"
+                                >
+                                  <Eye className="h-5 w-5" />
+                                </button>
                               </td>
                             </tr>
                           ))}
