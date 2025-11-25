@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import {
@@ -6,12 +6,15 @@ import {
   Award,
   CheckCircle,
   Download,
+  Eye,
+  Image as ImageIcon,
   Loader2,
   Search,
   Sparkles,
   TrendingDown,
   TrendingUp,
   Users,
+  X,
   XCircle
 } from 'lucide-react'
 import { DataService, EmployeePerformance, ComplianceReport, FeederPointSummary } from '@/lib/dataService'
@@ -19,7 +22,7 @@ import { AIService } from '@/lib/aiService'
 import { StatusPieChart } from '@/components/charts/StatusPieChart'
 import { SimpleBarChart } from '@/components/charts/SimpleBarChart'
 import { SummaryTrendChart } from '@/components/charts/SummaryTrendChart'
-import type { KeyboardEvent } from 'react'
+import type { KeyboardEvent, RefObject } from 'react'
 
 const formatPercent = (value: number) => `${Math.round((value || 0) * 100)}%`
 const toDateInputValue = (date: Date) => {
@@ -79,6 +82,12 @@ export default function EmployeeTrackerPage() {
   const [feederGeneratingAI, setFeederGeneratingAI] = useState(false)
   const [feederAiSummary, setFeederAiSummary] = useState<string | null>(null)
   const [feederQuestionChartData, setFeederQuestionChartData] = useState<Array<{ name: string; yes: number; no: number }>>([])
+  const [selectedFeederReport, setSelectedFeederReport] = useState<ComplianceReport | null>(null)
+  const [selectedReportImage, setSelectedReportImage] = useState<string | null>(null)
+  const statsSectionRef = useRef<HTMLDivElement | null>(null)
+  const employeeSectionRef = useRef<HTMLDivElement | null>(null)
+  const feederOverviewSectionRef = useRef<HTMLDivElement | null>(null)
+  const feederReportsSectionRef = useRef<HTMLDivElement | null>(null)
 
   const router = useRouter()
 
@@ -244,6 +253,8 @@ export default function EmployeeTrackerPage() {
     setFeederAiSummary(null)
     setFeederGeneratingAI(false)
     setFeederQuestionChartData([])
+    setSelectedFeederReport(null)
+    setSelectedReportImage(null)
   }, [selectedFeederKey, startDateInput, endDateInput])
 
   const feederAggregate = useMemo(() => {
@@ -453,6 +464,37 @@ export default function EmployeeTrackerPage() {
     URL.revokeObjectURL(url)
   }
 
+  const formatReportDate = (report: ComplianceReport) => {
+    const submittedAt = resolveReportDate(report)
+    return submittedAt ? submittedAt.toLocaleString() : 'Unknown'
+  }
+
+  const extractReportImages = (report: ComplianceReport) => {
+    const answerPhotos = report.answers.reduce<string[]>((acc, answer) => {
+      if (answer.photos && answer.photos.length > 0) {
+        acc.push(...answer.photos)
+      }
+      return acc
+    }, [])
+
+    const attachmentPhotos = (report.attachments || [])
+      .filter(att => att.type === 'photo')
+      .map(att => att.url)
+
+    return [...answerPhotos, ...attachmentPhotos]
+  }
+
+  const selectedFeederImages = useMemo(
+    () => (selectedFeederReport ? extractReportImages(selectedFeederReport) : []),
+    [selectedFeederReport]
+  )
+
+  const scrollToSection = (ref: RefObject<HTMLDivElement>) => {
+    if (ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -535,7 +577,38 @@ export default function EmployeeTrackerPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => scrollToSection(statsSectionRef)}
+            className="btn-secondary px-3 py-2 text-sm"
+          >
+            Jump to Summary
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollToSection(employeeSectionRef)}
+            className="btn-secondary px-3 py-2 text-sm"
+          >
+            Jump to Employee Activity
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollToSection(feederOverviewSectionRef)}
+            className="btn-secondary px-3 py-2 text-sm"
+          >
+            Jump to Feeder Overview
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollToSection(feederReportsSectionRef)}
+            className="btn-secondary px-3 py-2 text-sm"
+          >
+            Jump to Feeder Reports
+          </button>
+        </div>
+
+        <div ref={statsSectionRef} className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
           <div className="card">
             <div className="flex items-center justify-between">
               <div>
@@ -587,7 +660,7 @@ export default function EmployeeTrackerPage() {
           </div>
         </div>
 
-        <div className="card">
+        <div ref={employeeSectionRef} className="card">
           <h2 className="text-xl font-semibold text-gray-900">Employee Activity</h2>
           <p className="text-sm text-gray-500 mb-4">
             Click a team member to inspect their report history within the selected date range.
@@ -677,7 +750,7 @@ export default function EmployeeTrackerPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="card">
+          <div ref={feederOverviewSectionRef} className="card">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">Feeder Point Overview</h2>
@@ -765,7 +838,7 @@ export default function EmployeeTrackerPage() {
             </div>
           </div>
 
-          <div className="card">
+          <div ref={feederReportsSectionRef} className="card">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">Feeder Point Reports</h2>
@@ -881,6 +954,9 @@ export default function EmployeeTrackerPage() {
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Trip
                         </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Action
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
@@ -912,16 +988,228 @@ export default function EmployeeTrackerPage() {
                             <td className="px-4 py-3 text-sm text-gray-600">
                               {report.tripNumber ? `Trip ${report.tripNumber}` : 'N/A'}
                             </td>
+                            <td className="px-4 py-3">
+                              <button
+                                onClick={() => setSelectedFeederReport(report)}
+                                className="btn-secondary flex items-center space-x-2 px-3 py-2 text-sm"
+                              >
+                                <Eye className="h-4 w-4" />
+                                <span>View Report</span>
+                              </button>
+                            </td>
                           </tr>
                         )
                       })}
                     </tbody>
                   </table>
                 </div>
+
               </>
             )}
           </div>
         </div>
+
+        {selectedFeederReport && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-8">
+            <div className="bg-white w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-lg shadow-2xl p-6">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Feeder Point Report</p>
+                  <h3 className="text-xl font-semibold text-gray-900">
+                    {selectedFeederReport.feederPointName || 'Feeder Point'}
+                  </h3>
+                  <p className="text-sm text-gray-600">Submitted {formatReportDate(selectedFeederReport)}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setSelectedFeederReport(null)
+                    setSelectedReportImage(null)
+                  }}
+                  className="rounded-full p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+                  aria-label="Close report details"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-6 lg:grid-cols-3">
+                <div className="lg:col-span-2 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-gray-700">
+                    <p>
+                      <span className="font-semibold text-gray-900">Employee:</span>{' '}
+                      {selectedFeederReport.userName || selectedFeederReport.submittedBy || 'Unknown'}
+                    </p>
+                    <p>
+                      <span className="font-semibold text-gray-900">Team:</span>{' '}
+                      {selectedFeederReport.teamName || 'N/A'}
+                    </p>
+                    <p>
+                      <span className="font-semibold text-gray-900">Status:</span>{' '}
+                      <span
+                        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${
+                          selectedFeederReport.status === 'approved'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : selectedFeederReport.status === 'rejected'
+                              ? 'bg-red-100 text-red-700'
+                              : selectedFeederReport.status === 'pending'
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-blue-100 text-blue-700'
+                        }`}
+                      >
+                        {(selectedFeederReport.status || 'pending').replace('_', ' ')}
+                      </span>
+                    </p>
+                    <p>
+                      <span className="font-semibold text-gray-900">Trip:</span>{' '}
+                      {selectedFeederReport.tripNumber ? `Trip ${selectedFeederReport.tripNumber}` : 'N/A'}
+                    </p>
+                    <p>
+                      <span className="font-semibold text-gray-900">Trip Date:</span>{' '}
+                      {selectedFeederReport.tripDate || 'N/A'}
+                    </p>
+                    <p>
+                      <span className="font-semibold text-gray-900">Feeder Point:</span>{' '}
+                      {selectedFeederReport.feederPointName || 'N/A'}
+                    </p>
+                    <p className="sm:col-span-2">
+                      <span className="font-semibold text-gray-900">Location:</span>{' '}
+                      {selectedFeederReport.submittedLocation?.address || 'Not provided'}{' '}
+                      {selectedFeederReport.distanceFromFeederPoint ? (
+                        <span className="text-gray-500">
+                          ({selectedFeederReport.distanceFromFeederPoint.toFixed(2)}m from feeder point)
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-semibold text-gray-900">Report Answers</h4>
+                    {selectedFeederReport.answers.length === 0 ? (
+                      <p className="text-sm text-gray-600">No answers recorded for this submission.</p>
+                    ) : (
+                      selectedFeederReport.answers.map((answer, index) => (
+                        <div key={answer.questionId || index} className="rounded-lg border border-gray-200 p-3">
+                          <p className="text-sm font-medium text-gray-900">
+                            {answer.description || answer.questionId || 'Question'}
+                          </p>
+                          <p className="text-sm text-gray-700 mt-1">Answer: {answer.answer || 'N/A'}</p>
+                          {answer.notes && <p className="text-xs text-gray-500 mt-1">Notes: {answer.notes}</p>}
+
+                          {answer.photos && answer.photos.length > 0 && (
+                            <div className="mt-3">
+                              <p className="text-xs font-semibold text-gray-700 mb-2 flex items-center space-x-2">
+                                <ImageIcon className="h-4 w-4" />
+                                <span>Photos</span>
+                                <span className="text-gray-500">({answer.photos.length})</span>
+                              </p>
+                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                {answer.photos.map((photoUrl, photoIndex) => (
+                                  <button
+                                    key={`${answer.questionId || 'answer'}-${photoIndex}`}
+                                    onClick={() => setSelectedReportImage(photoUrl)}
+                                    className="group relative overflow-hidden rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  >
+                                    <img
+                                      src={photoUrl}
+                                      alt={`Answer photo ${photoIndex + 1}`}
+                                      className="h-24 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                                    />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 flex items-center space-x-2">
+                          <ImageIcon className="h-4 w-4" />
+                          <span>Images</span>
+                        </h4>
+                        <p className="text-xs text-gray-500">Click an image to enlarge</p>
+                      </div>
+                      <span className="text-xs text-gray-600">
+                        {selectedFeederImages.length} file{selectedFeederImages.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    {selectedFeederImages.length > 0 ? (
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {selectedFeederImages.map((url, idx) => (
+                          <button
+                            key={`${selectedFeederReport.id}-image-${idx}`}
+                            onClick={() => setSelectedReportImage(url)}
+                            className="group relative overflow-hidden rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          >
+                            <img
+                              src={url}
+                              alt={`Report image ${idx + 1}`}
+                              className="h-24 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-gray-600">No images attached to this report.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2">Attachments</h4>
+                    {selectedFeederReport.attachments && selectedFeederReport.attachments.length > 0 ? (
+                      <div className="space-y-3">
+                        {selectedFeederReport.attachments.map(att => (
+                          <div key={att.id} className="rounded-md border border-gray-100 p-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-semibold text-gray-900">{att.filename}</p>
+                              <span className="text-xs text-gray-600">{att.type.toUpperCase()}</span>
+                            </div>
+                            <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
+                              <span>{att.uploadedDate ? new Date(att.uploadedDate).toLocaleDateString() : 'Date unknown'}</span>
+                              <a
+                                href={att.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-indigo-600 hover:text-indigo-800 font-semibold"
+                              >
+                                Open
+                              </a>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-600">No attachments included.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedReportImage && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+            <button
+              onClick={() => setSelectedReportImage(null)}
+              className="absolute right-6 top-6 rounded-full bg-white/90 p-2 text-gray-800 shadow hover:bg-white"
+              aria-label="Close image preview"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <img
+              src={selectedReportImage}
+              alt="Report attachment preview"
+              className="max-h-[85vh] max-w-[95vw] object-contain rounded-lg shadow-2xl"
+            />
+          </div>
+        )}
 
       </div>
     </>
