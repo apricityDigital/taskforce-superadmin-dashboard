@@ -789,6 +789,32 @@ export class DataService {
     await deleteDoc(feederPointRef);
   }
 
+  static async deleteFeederPointAndReports(feederPointId?: string, feederPointName?: string): Promise<void> {
+    const deletions: Promise<any>[] = [];
+
+    if (feederPointId) {
+      const feederPointRef = doc(db, 'feederPoints', feederPointId);
+      deletions.push(deleteDoc(feederPointRef));
+    }
+
+    const reportQueries = [];
+    if (feederPointId) {
+      reportQueries.push(query(collection(db, 'complianceReports'), where('feederPointId', '==', feederPointId)));
+    }
+    if (feederPointName) {
+      reportQueries.push(query(collection(db, 'complianceReports'), where('feederPointName', '==', feederPointName)));
+    }
+
+    for (const qRef of reportQueries) {
+      const snap = await getDocs(qRef);
+      snap.forEach(docSnap => {
+        deletions.push(deleteDoc(doc(db, 'complianceReports', docSnap.id)));
+      });
+    }
+
+    await Promise.all(deletions);
+  }
+
   static async createSampleFeederPoints(): Promise<void> {
     const samplePoints = [
       { name: 'FP-001', status: 'active', priority: 'high', location: { address: '123 Main St', latitude: 34.0522, longitude: -118.2437 } },

@@ -28,7 +28,7 @@ export default function FeederPointsPage() {
   const [filteredFeederPoints, setFilteredFeederPoints] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('active')
   const [assignmentFilter, setAssignmentFilter] = useState('all')
   const [selectedFeederPoint, setSelectedFeederPoint] = useState<any>(null)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
@@ -60,49 +60,47 @@ export default function FeederPointsPage() {
   }, [])
 
   useEffect(() => {
-    if (feederPoints.length > 0 && users.length > 0 && teams.length > 0) {
-      const enhanced = feederPoints.map(fp => {
-        let assignmentDetails = null
+    const enhanced = feederPoints.map(fp => {
+      let assignmentDetails = null
 
-        if (fp.assignedUserId) {
-          const assignedUser = users.find(user => user.id === fp.assignedUserId)
-          if (assignedUser) {
-            assignmentDetails = {
-              type: 'individual',
-              name: assignedUser.name || 'Unknown User',
-              email: assignedUser.email || '',
-              id: fp.assignedUserId,
-              role: assignedUser.role || 'User'
-            }
+      if (fp.assignedUserId) {
+        const assignedUser = users.find(user => user.id === fp.assignedUserId)
+        if (assignedUser) {
+          assignmentDetails = {
+            type: 'individual',
+            name: assignedUser.name || 'Unknown User',
+            email: assignedUser.email || '',
+            id: fp.assignedUserId,
+            role: assignedUser.role || 'User'
           }
         }
+      }
 
-        if (fp.assignedTeamId) {
-          const assignedTeam = teams.find(team => team.id === fp.assignedTeamId)
-          if (assignedTeam) {
-            const activeMembers = assignedTeam.members?.filter(member => member.isActive) || []
-            assignmentDetails = {
-              type: 'team',
-              name: assignedTeam.name || 'Unknown Team',
-              memberCount: activeMembers.length,
-              id: fp.assignedTeamId,
-              members: activeMembers
-            }
+      if (fp.assignedTeamId) {
+        const assignedTeam = teams.find(team => team.id === fp.assignedTeamId)
+        if (assignedTeam) {
+          const activeMembers = assignedTeam.members?.filter(member => member.isActive) || []
+          assignmentDetails = {
+            type: 'team',
+            name: assignedTeam.name || 'Unknown Team',
+            memberCount: activeMembers.length,
+            id: fp.assignedTeamId,
+            members: activeMembers
           }
         }
+      }
 
-        return {
-          ...fp,
-          assignmentDetails
-        }
-      })
-      setEnhancedFeederPoints(enhanced)
-    }
+      return {
+        ...fp,
+        assignmentDetails
+      }
+    })
+    setEnhancedFeederPoints(enhanced)
   }, [feederPoints, teams, users])
 
   useEffect(() => {
     filterFeederPoints()
-  }, [feederPoints, searchTerm, statusFilter, assignmentFilter])
+  }, [feederPoints, enhancedFeederPoints, searchTerm, statusFilter, assignmentFilter])
 
   const loadFeederPoints = async () => {
     setLoading(true);
