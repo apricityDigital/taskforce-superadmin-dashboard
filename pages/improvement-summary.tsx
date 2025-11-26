@@ -338,9 +338,8 @@ export default function ImprovementSummaryPage() {
         entry.photos > 0
           ? `${entry.photos} photo${entry.photos === 1 ? '' : 's'} show the place, helping the score.`
           : 'No photos were shared, so the score relies on answers only.',
-        ,
         entry.aiFlagged > 0 ? `${entry.aiFlagged} report${entry.aiFlagged === 1 ? '' : 's'} need human recheck.` : 'Nothing is waiting for a human recheck.'
-      ]
+      ].filter((note): note is string => note !== undefined)
 
       result.push({
         ...entry,
