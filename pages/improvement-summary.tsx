@@ -44,6 +44,14 @@ type FeederInsight = {
   improvementNotes: string[]
 }
 
+type AggregateSummary = {
+  photos: number
+  answeredQuestions: number
+  totalResponses: number
+  earliest: Date | null
+  latest: Date | null
+}
+
 const toDateInputValue = (date: Date) => {
   const copy = new Date(date)
   copy.setHours(0, 0, 0, 0)
@@ -148,7 +156,7 @@ export default function ImprovementSummaryPage() {
     })
   }, [reports, startDate, endDate, dateError])
 
-  const aggregate = useMemo(() => {
+  const aggregate = useMemo<AggregateSummary>(() => {
     let photos = 0
     let answeredQuestions = 0
     let totalResponses = filteredReports.length
@@ -181,7 +189,13 @@ export default function ImprovementSummaryPage() {
   }, [filteredReports])
 
   const collectReportImages = (report: ComplianceReport) => {
-    const answerPhotos = report.answers?.flatMap(ans => ans.photos || []) || []
+    const answerPhotos =
+      report.answers?.reduce<string[]>((acc, ans) => {
+        if (ans.photos && ans.photos.length > 0) {
+          acc.push(...ans.photos)
+        }
+        return acc
+      }, []) || []
     const attachmentPhotos = (report.attachments || [])
       .filter(att => att.type === 'photo')
       .map(att => att.url)
@@ -565,7 +579,7 @@ export default function ImprovementSummaryPage() {
                       className="rounded-md border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="all">All feeder points</option>
-                      <option value="top">Top performers (>=70%)</option>
+                      <option value="top">Top performers (&gt;=70%)</option>
                       <option value="needs_attention">Needs attention (&lt;40% or flagged)</option>
                     </select>
                   </div>
