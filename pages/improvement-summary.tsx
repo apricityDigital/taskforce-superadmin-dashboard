@@ -213,7 +213,8 @@ export default function ImprovementSummaryPage() {
           beforeImages: [],
           afterImages: [],
           beforeDate: null,
-          afterDate: null
+          afterDate: null,
+          improvementNotes: []
         })
       }
 
@@ -452,7 +453,7 @@ export default function ImprovementSummaryPage() {
               Date-filtered rollup of submissions, photo evidence, answered questions, and AI-styled improvement insights.
             </p>
           </div>
-         
+
         </div>
 
         <div className="rounded-2xl border border-slate-100 bg-white shadow-lg p-5">
@@ -466,11 +467,10 @@ export default function ImprovementSummaryPage() {
                 <button
                   key={`inline-${range}`}
                   onClick={() => setQuickRangeDates(range)}
-                  className={`px-3 py-2 rounded-lg border ${
-                    quickRange === range
+                  className={`px-3 py-2 rounded-lg border ${quickRange === range
                       ? 'border-indigo-500 text-indigo-700 bg-indigo-50'
                       : 'border-gray-200 text-gray-700 hover:border-indigo-300 hover:text-indigo-700'
-                  }`}
+                    }`}
                 >
                   {range === 'all' ? 'All time' : `Last ${range.replace('d', '')} days`}
                 </button>
@@ -668,40 +668,38 @@ export default function ImprovementSummaryPage() {
                             <td className="px-4 py-3 text-sm text-gray-600">
                               {insight.latestDate ? insight.latestDate.toLocaleDateString() : 'N/A'}
                             </td>
-                          <td className="px-4 py-3 text-sm text-gray-800">
-                            <div className="flex flex-col gap-2">
-                              <button
-                                onClick={() => openFlaggedReview(insight.key)}
-                                disabled={insight.aiFlagged === 0}
-                                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
-                                  insight.aiFlagged === 0
-                                    ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                    : 'border-indigo-200 text-indigo-700 hover:border-indigo-400'
-                                }`}
-                              >
-                                <Eye className="h-4 w-4" />
-                                Review AI-flagged ({insight.aiFlagged})
-                              </button>
-                              <button
-                                onClick={() =>
-                                  setTransformationView({
-                                    feederName: insight.name,
-                                    before: insight.beforeImages,
-                                    after: insight.afterImages,
-                                    beforeDate: insight.beforeDate,
-                                    afterDate: insight.afterDate
-                                  })
-                                }
-                                disabled={insight.beforeImages.length === 0 && insight.afterImages.length === 0}
-                                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
-                                  insight.beforeImages.length === 0 && insight.afterImages.length === 0
-                                    ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                    : 'border-emerald-200 text-emerald-700 hover:border-emerald-400'
-                                }`}
-                              >
-                                <Sparkles className="h-4 w-4" />
-                                View transformation
-                              </button>
+                            <td className="px-4 py-3 text-sm text-gray-800">
+                              <div className="flex flex-col gap-2">
+                                <button
+                                  onClick={() => openFlaggedReview(insight.key)}
+                                  disabled={insight.aiFlagged === 0}
+                                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${insight.aiFlagged === 0
+                                      ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                      : 'border-indigo-200 text-indigo-700 hover:border-indigo-400'
+                                    }`}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                  Review AI-flagged ({insight.aiFlagged})
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setTransformationView({
+                                      feederName: insight.name,
+                                      before: insight.beforeImages,
+                                      after: insight.afterImages,
+                                      beforeDate: insight.beforeDate,
+                                      afterDate: insight.afterDate
+                                    })
+                                  }
+                                  disabled={insight.beforeImages.length === 0 && insight.afterImages.length === 0}
+                                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${insight.beforeImages.length === 0 && insight.afterImages.length === 0
+                                      ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                      : 'border-emerald-200 text-emerald-700 hover:border-emerald-400'
+                                    }`}
+                                >
+                                  <Sparkles className="h-4 w-4" />
+                                  View transformation
+                                </button>
                                 {/* <button
                                   onClick={() => handleDeleteFeeder(insight.key, insight.name, insight.feederPointId)}
                                   disabled={deletingFeederKey === insight.key}
@@ -716,7 +714,7 @@ export default function ImprovementSummaryPage() {
                             </td>
                           </tr>
                         )
-                    })}
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -781,13 +779,12 @@ export default function ImprovementSummaryPage() {
                               <p className="text-xs text-gray-600">
                                 Status:{' '}
                                 <span
-                                  className={`px-2 py-1 rounded-full text-[11px] font-semibold ${
-                                    report.status === 'approved'
+                                  className={`px-2 py-1 rounded-full text-[11px] font-semibold ${report.status === 'approved'
                                       ? 'bg-emerald-100 text-emerald-700'
                                       : report.status === 'rejected'
                                         ? 'bg-red-100 text-red-700'
                                         : 'bg-amber-100 text-amber-700'
-                                  }`}
+                                    }`}
                                 >
                                   {report.status}
                                 </span>
