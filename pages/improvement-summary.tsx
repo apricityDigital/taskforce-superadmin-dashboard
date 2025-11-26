@@ -369,7 +369,6 @@ export default function ImprovementSummaryPage() {
 
     return { feederInsights: sorted, flaggedMap: flaggedByFeeder }
   }, [filteredReports, feederFilter, hiddenFeederKeys])
-
   const summaryTitle = useMemo(() => {
     if (dateError) return 'Resolve date filters to view impact.'
     if (filteredReports.length === 0) return 'No reports in this date range.'
@@ -467,8 +466,8 @@ export default function ImprovementSummaryPage() {
                   key={`inline-${range}`}
                   onClick={() => setQuickRangeDates(range)}
                   className={`px-3 py-2 rounded-lg border ${quickRange === range
-                      ? 'border-indigo-500 text-indigo-700 bg-indigo-50'
-                      : 'border-gray-200 text-gray-700 hover:border-indigo-300 hover:text-indigo-700'
+                    ? 'border-indigo-500 text-indigo-700 bg-indigo-50'
+                    : 'border-gray-200 text-gray-700 hover:border-indigo-300 hover:text-indigo-700'
                     }`}
                 >
                   {range === 'all' ? 'All time' : `Last ${range.replace('d', '')} days`}
@@ -540,8 +539,8 @@ export default function ImprovementSummaryPage() {
                 <div>
                   <p className="text-sm text-gray-500">Coverage window</p>
                   <p className="text-base font-semibold text-gray-900">
-                    {aggregate.earliest ? aggregate.earliest.toLocaleDateString() : '--'} to{' '}
-                    {aggregate.latest ? aggregate.latest.toLocaleDateString() : '--'}
+                    {aggregate.earliest?.toLocaleDateString() ?? '--'} to{' '}
+                    {aggregate.latest?.toLocaleDateString() ?? '--'}
                   </p>
                 </div>
                 <Clock className="h-10 w-10 text-slate-500" />
@@ -673,8 +672,8 @@ export default function ImprovementSummaryPage() {
                                   onClick={() => openFlaggedReview(insight.key)}
                                   disabled={insight.aiFlagged === 0}
                                   className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${insight.aiFlagged === 0
-                                      ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                      : 'border-indigo-200 text-indigo-700 hover:border-indigo-400'
+                                    ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                    : 'border-indigo-200 text-indigo-700 hover:border-indigo-400'
                                     }`}
                                 >
                                   <Eye className="h-4 w-4" />
@@ -692,8 +691,8 @@ export default function ImprovementSummaryPage() {
                                   }
                                   disabled={insight.beforeImages.length === 0 && insight.afterImages.length === 0}
                                   className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${insight.beforeImages.length === 0 && insight.afterImages.length === 0
-                                      ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                                      : 'border-emerald-200 text-emerald-700 hover:border-emerald-400'
+                                    ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                                    : 'border-emerald-200 text-emerald-700 hover:border-emerald-400'
                                     }`}
                                 >
                                   <Sparkles className="h-4 w-4" />
@@ -779,10 +778,10 @@ export default function ImprovementSummaryPage() {
                                 Status:{' '}
                                 <span
                                   className={`px-2 py-1 rounded-full text-[11px] font-semibold ${report.status === 'approved'
-                                      ? 'bg-emerald-100 text-emerald-700'
-                                      : report.status === 'rejected'
-                                        ? 'bg-red-100 text-red-700'
-                                        : 'bg-amber-100 text-amber-700'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : report.status === 'rejected'
+                                      ? 'bg-red-100 text-red-700'
+                                      : 'bg-amber-100 text-amber-700'
                                     }`}
                                 >
                                   {report.status}
