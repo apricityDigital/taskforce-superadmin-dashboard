@@ -551,6 +551,383 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
   }, [])
 }
 
+type WhatsappDescriptorKey = 'excellent' | 'strong' | 'moderate' | 'attention' | 'critical'
+
+interface WhatsappCategoryDetailArgs {
+  positive: number
+  negative: number
+  breakdown: QuestionBreakdown
+}
+
+interface WhatsappCategoryConfig {
+  id: string
+  label: string
+  narrativeLabel?: string
+  positiveValues: string[]
+  negativeValues?: string[]
+  positiveLabel: string
+  negativeLabel: string
+  descriptorOverrides?: Partial<Record<WhatsappDescriptorKey, string>>
+  detailFormatter?: (args: WhatsappCategoryDetailArgs) => string
+}
+
+interface WhatsappLineSummary {
+  label: string
+  narrativeLabel: string
+  descriptorKey: WhatsappDescriptorKey
+  line: string
+}
+
+const WHATSAPP_DESCRIPTOR_SCALE: Array<{ threshold: number; key: WhatsappDescriptorKey; label: string }> = [
+  { threshold: 0.8, key: 'excellent', label: 'Very good' },
+  { threshold: 0.65, key: 'strong', label: 'Strong' },
+  { threshold: 0.5, key: 'moderate', label: 'Moderate' },
+  { threshold: 0.35, key: 'attention', label: 'Needs attention' },
+  { threshold: 0, key: 'critical', label: 'Critical' },
+]
+
+const WHATSAPP_CORE_CATEGORIES: WhatsappCategoryConfig[] = [
+  {
+    id: 'scp_area_clean',
+    label: 'SCP Cleanliness',
+    narrativeLabel: 'cleanliness',
+    positiveValues: ['yes', 'clean', 'good'],
+    negativeValues: ['no', 'unclean', 'not clean', 'dirty'],
+    positiveLabel: 'clean',
+    negativeLabel: 'unclean',
+  },
+  {
+    id: 'surrounding_area_maintained',
+    label: 'Surroundings',
+    narrativeLabel: 'surroundings',
+    positiveValues: ['maintained', 'clean', 'clear', 'good'],
+    negativeValues: ['not maintained', 'not clean', 'dirty', 'unclean', 'clogged'],
+    positiveLabel: 'maintained',
+    negativeLabel: 'not maintained',
+  },
+  {
+    id: 'drains_clean',
+    label: 'Drains',
+    narrativeLabel: 'drains',
+    positiveValues: ['clean', 'clear', 'desilted'],
+    negativeValues: ['dirty', 'clogged', 'not clean', 'blocked'],
+    positiveLabel: 'clean',
+    negativeLabel: 'not clean',
+  },
+  {
+    id: 'waste_segregated',
+    label: 'Segregation',
+    narrativeLabel: 'segregation',
+    positiveValues: ['yes', 'segregated', 'proper'],
+    negativeValues: ['no', 'mixed', 'not segregated'],
+    positiveLabel: 'segregated',
+    negativeLabel: 'not segregated',
+  },
+  {
+    id: 'waste_volume_reasonable',
+    label: 'Waste Volume',
+    narrativeLabel: 'waste volume',
+    positiveValues: ['reasonable', 'low', 'normal'],
+    negativeValues: ['high', 'overflow', 'excess'],
+    positiveLabel: 'reasonable',
+    negativeLabel: 'high',
+  },
+]
+
+const sumMatchingAnswers = (breakdown: QuestionBreakdown, keywords?: string[]) => {
+  if (!keywords?.length) return 0
+  const normalizedKeywords = keywords.map(keyword => keyword.toLowerCase())
+  return breakdown.answers.reduce((sum, answer) => {
+    if (normalizedKeywords.some(keyword => answer.normalized.includes(keyword))) {
+      return sum + answer.value
+    }
+    return sum
+  }, 0)
+}
+
+const describePerformanceLevel = (
+  positiveCount: number,
+  denominator: number,
+  overrides?: Partial<Record<WhatsappDescriptorKey, string>>
+): { key: WhatsappDescriptorKey; label: string } => {
+  const safeDenominator = denominator > 0 ? denominator : 1
+  const ratio = positiveCount / safeDenominator
+  for (const level of WHATSAPP_DESCRIPTOR_SCALE) {
+    if (ratio >= level.threshold) {
+      return {
+        key: level.key,
+        label: overrides?.[level.key] || level.label,
+      }
+    }
+  }
+  return { key: 'critical', label: overrides?.critical || 'Critical' }
+}
+
+const formatSiteCount = (count: number, description: string) => {
+  return `${count} site${count === 1 ? '' : 's'} ${description}`
+}
+
+const formatListForSentence = (items: string[]) => {
+  if (!items.length) return ''
+  if (items.length === 1) return items[0]
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+}
+
+const summarizeAnswersForWhatsapp = (breakdown: QuestionBreakdown, maxEntries = 3) => {
+  if (!breakdown.answers?.length) {
+    const total = breakdown.totalResponses || 0
+    return total ? `${total} responses recorded` : 'No responses recorded'
+  }
+
+  const topAnswers = breakdown.answers.slice(0, maxEntries)
+  const summaryParts = topAnswers.map(answer => `${answer.value} ${answer.label}`)
+  const accounted = topAnswers.reduce((sum, answer) => sum + answer.value, 0)
+  const remaining = Math.max(breakdown.totalResponses - accounted, 0)
+  if (remaining > 0) {
+    summaryParts.push(`${remaining} other${remaining === 1 ? '' : 's'}`)
+  }
+
+  return `${summaryParts.join(' | ')} (${breakdown.totalResponses} total)`
+}
+
+const buildCoreCategorySummaries = (questionBreakdowns: QuestionBreakdown[]): WhatsappLineSummary[] => {
+  return WHATSAPP_CORE_CATEGORIES.map(config => {
+    const breakdown = questionBreakdowns.find(entry => entry.id === config.id)
+    if (!breakdown || !breakdown.totalResponses) {
+      return null
+    }
+
+    const positive = sumMatchingAnswers(breakdown, config.positiveValues)
+    const negativeByKeywords = config.negativeValues?.length ? sumMatchingAnswers(breakdown, config.negativeValues) : 0
+    const matched = positive + negativeByKeywords
+    const negative =
+      matched >= breakdown.totalResponses
+        ? negativeByKeywords
+        : negativeByKeywords + Math.max(breakdown.totalResponses - matched, 0)
+    const denominator = positive + negative
+    if (!denominator) {
+      return null
+    }
+
+    const descriptor = describePerformanceLevel(positive, denominator, config.descriptorOverrides)
+    const detailText = config.detailFormatter
+      ? config.detailFormatter({ positive, negative, breakdown })
+      : summarizeAnswersForWhatsapp(breakdown)
+
+    return {
+      label: config.label,
+      narrativeLabel: config.narrativeLabel || config.label.toLowerCase(),
+      descriptorKey: descriptor.key,
+      line: `- ${config.label}: ${descriptor.label} - ${detailText}.`,
+    }
+  }).filter(Boolean) as WhatsappLineSummary[]
+}
+
+const buildWorkerSummary = (breakdown?: QuestionBreakdown | null): WhatsappLineSummary | null => {
+  if (!breakdown || !breakdown.totalResponses) {
+    return null
+  }
+
+  let zero = 0
+  let oneToThree = 0
+  let fourPlus = 0
+  let unspecified = 0
+
+  breakdown.answers.forEach(answer => {
+    const normalized = answer.normalized
+    const numericMatch = normalized.match(/-?\d+(\.\d+)?/)
+    let value: number | null = numericMatch ? Number(numericMatch[0]) : null
+    if (Number.isNaN(value)) {
+      value = null
+    }
+
+    if (value === null) {
+      if (normalized.includes('no') || normalized.includes('none') || normalized.includes('nil') || normalized.includes('zero')) {
+        value = 0
+      } else if (normalized.includes('one')) {
+        value = 1
+      } else if (normalized.includes('two')) {
+        value = 2
+      } else if (normalized.includes('three')) {
+        value = 3
+      }
+    }
+
+    if (value === null) {
+      unspecified += answer.value
+      return
+    }
+
+    if (value <= 0) {
+      zero += answer.value
+    } else if (value <= 3) {
+      oneToThree += answer.value
+    } else {
+      fourPlus += answer.value
+    }
+  })
+
+  const denominator = zero + oneToThree + fourPlus
+  if (!denominator) {
+    return null
+  }
+  const positive = oneToThree + fourPlus
+  const descriptor = describePerformanceLevel(positive, denominator, {
+    excellent: 'Fully staffed',
+    strong: 'Stable coverage',
+    moderate: 'Low availability',
+    attention: 'Very low availability',
+    critical: 'No workforce',
+  })
+
+  const detailParts: string[] = []
+  if (zero) detailParts.push(formatSiteCount(zero, 'with 0 workers'))
+  if (oneToThree) detailParts.push(formatSiteCount(oneToThree, 'with 1-3 workers'))
+  if (fourPlus) detailParts.push(formatSiteCount(fourPlus, 'with 4+ workers'))
+  if (unspecified) detailParts.push(formatSiteCount(unspecified, 'not reported'))
+  const details = detailParts.join('; ') || 'No worker data captured'
+
+  return {
+    label: 'Workers',
+    narrativeLabel: 'worker availability',
+    descriptorKey: descriptor.key,
+    line: `- Workers: ${descriptor.label} - ${details}.`,
+  }
+}
+
+const buildWasteCollectionSummary = (breakdown?: QuestionBreakdown | null): WhatsappLineSummary | null => {
+  if (!breakdown || !breakdown.totalResponses) {
+    return null
+  }
+
+  const positive = sumMatchingAnswers(breakdown, ['collected', 'cleared', 'vehicle left', 'completed', 'done'])
+  const negative = sumMatchingAnswers(breakdown, ['waiting', 'pending', 'not', 'delay', 'delayed'])
+  const denominator = positive + negative || breakdown.totalResponses
+  const descriptor = describePerformanceLevel(positive, denominator, {
+    excellent: 'Smooth',
+    strong: 'Mostly smooth',
+    moderate: 'Mixed',
+    attention: 'Delays noted',
+    critical: 'Stalled',
+  })
+
+  const topAnswers = breakdown.answers.slice(0, 3).map(answer => `${answer.value} ${answer.label.toLowerCase()}`)
+  const details = topAnswers.length ? topAnswers.join('; ') : `${breakdown.totalResponses} updates logged`
+
+  return {
+    label: 'Waste Collection',
+    narrativeLabel: 'waste pickup',
+    descriptorKey: descriptor.key,
+    line: `- Waste Collection: ${descriptor.label} - ${details}.`,
+  }
+}
+
+const buildOverallNarrative = (summaries: WhatsappLineSummary[]) => {
+  if (!summaries.length) {
+    return ''
+  }
+
+  const strong = summaries
+    .filter(summary => summary.descriptorKey === 'excellent' || summary.descriptorKey === 'strong')
+    .map(summary => summary.narrativeLabel)
+  const mixed = summaries.filter(summary => summary.descriptorKey === 'moderate').map(summary => summary.narrativeLabel)
+  const weak = summaries
+    .filter(summary => summary.descriptorKey === 'attention' || summary.descriptorKey === 'critical')
+    .map(summary => summary.narrativeLabel)
+
+  const parts: string[] = []
+  if (strong.length) {
+    parts.push(`Trip performance is strong in ${formatListForSentence(strong)}.`)
+  }
+  if (mixed.length) {
+    parts.push(`${formatListForSentence(mixed)} show mixed results.`)
+  }
+  if (weak.length) {
+    parts.push(`${formatListForSentence(weak)} need attention.`)
+  }
+
+  return parts.join(' ')
+}
+
+interface WhatsappReportParams {
+  reportSummary: ReportSummary | null
+  questionBreakdowns: QuestionBreakdown[]
+  zoneFilter: 'all' | string
+  zoneOptions: Array<{ value: string; label: string }>
+  filterTrip: 'all' | 1 | 2 | 3
+  useCustomRange: boolean
+  startDate: string
+  endDate: string
+  selectedDate: string
+}
+
+const buildWhatsappShortReport = ({
+  reportSummary,
+  questionBreakdowns,
+  zoneFilter,
+  zoneOptions,
+  filterTrip,
+  useCustomRange,
+  startDate,
+  endDate,
+  selectedDate,
+}: WhatsappReportParams) => {
+  if (!reportSummary || reportSummary.total === 0) {
+    return ''
+  }
+
+  const zoneLabel =
+    zoneFilter === 'all'
+      ? 'All Zones'
+      : zoneOptions.find(option => option.value === zoneFilter)?.label || `Zone ${zoneFilter}`
+  const tripLabel = filterTrip === 'all' ? 'All Trips' : `Trip ${filterTrip}`
+  const resolvedStart = startDate || selectedDate
+  const resolvedEnd = endDate || resolvedStart
+  const dateLabel =
+    useCustomRange && resolvedStart && resolvedEnd
+      ? resolvedStart === resolvedEnd
+        ? resolvedStart
+        : `${resolvedStart} to ${resolvedEnd}`
+      : selectedDate
+
+  const lines: string[] = [`${zoneLabel} | ${tripLabel} - Concise Report (${dateLabel})`]
+  const statusParts: string[] = [`${reportSummary.approved}/${reportSummary.total} Approved`, `${reportSummary.rejected} Rejected`]
+  if (reportSummary.actionRequired) {
+    statusParts.push(`${reportSummary.actionRequired} Requires Action`)
+  }
+  if (reportSummary.pending) {
+    statusParts.push(`${reportSummary.pending} Pending`)
+  }
+  lines.push(statusParts.join(' | '))
+
+  const categorySummaries = buildCoreCategorySummaries(questionBreakdowns)
+  const workerSummary = buildWorkerSummary(questionBreakdowns.find(entry => entry.id === SWACH_QUESTION_ID))
+  const wasteSummary = buildWasteCollectionSummary(
+    questionBreakdowns.find(entry => entry.id === 'waste_collection_status')
+  )
+  const keySummaries: WhatsappLineSummary[] = [
+    ...categorySummaries,
+    ...(workerSummary ? [workerSummary] : []),
+    ...(wasteSummary ? [wasteSummary] : []),
+  ]
+
+  if (keySummaries.length) {
+    lines.push('', 'Key Field Updates:')
+    keySummaries.forEach(summary => lines.push(summary.line))
+  }
+
+  const overallNarrative = buildOverallNarrative(
+    keySummaries.filter(Boolean) as WhatsappLineSummary[]
+  )
+
+  if (overallNarrative) {
+    lines.push('', 'Overall:', overallNarrative)
+  }
+
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export default function DailyReportsPage() {
   const { user } = useAuth()
   const [reports, setReports] = useState<ComplianceReport[]>([])
@@ -745,6 +1122,31 @@ export default function DailyReportsPage() {
     }
     return patched.filter(breakdown => !HIDDEN_QUESTION_CHART_IDS.has(breakdown.id))
   }, [baseQuestionBreakdowns, swachFilteredBreakdown])
+  const whatsappReportText = useMemo(
+    () =>
+      buildWhatsappShortReport({
+        reportSummary,
+        questionBreakdowns,
+        zoneFilter,
+        zoneOptions,
+        filterTrip,
+        useCustomRange,
+        startDate,
+        endDate,
+        selectedDate,
+      }),
+    [
+      reportSummary,
+      questionBreakdowns,
+      zoneFilter,
+      zoneOptions,
+      filterTrip,
+      useCustomRange,
+      startDate,
+      endDate,
+      selectedDate,
+    ]
+  )
   const memberQuestionStats = useMemo(() => buildMemberQuestionStats(reports), [reports])
   const selectedMember = useMemo(
     () => memberQuestionStats.find(member => member.memberId === selectedMemberId) || null,
@@ -1128,6 +1530,25 @@ export default function DailyReportsPage() {
     }
   }
 
+  const handleShareWhatsappReport = async () => {
+    if (!whatsappReportText) {
+      return
+    }
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(whatsappReportText)
+      }
+    } catch (error) {
+      console.warn('Failed to copy WhatsApp short report to clipboard:', error)
+    }
+
+    if (typeof window !== 'undefined') {
+      const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(whatsappReportText)}`
+      window.open(whatsappUrl, '_blank')
+    }
+  }
+
   const handleUpdateStatus = async (status: ComplianceReport['status']) => {
     if (!selectedReport || !user) return
 
@@ -1409,6 +1830,14 @@ export default function DailyReportsPage() {
             >
               <Sparkles className="h-4 w-4" />
               <span>{generatingAI && selectedAnalysisType === 'summary' ? 'Analyzing...' : 'Generate Concise AI Summary'}</span>
+            </button>
+            <button
+              onClick={handleShareWhatsappReport}
+              disabled={!whatsappReportText}
+              className="flex-1 btn-secondary flex items-center justify-center space-x-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Send className="h-4 w-4" />
+              <span>WhatsApp Short Report</span>
             </button>
           </div>
           {dailyAiDetailedAnalysis && selectedAnalysisType === 'detailed' && (
