@@ -21,7 +21,33 @@ export interface DailyReportData {
   rawReports: ComplianceReport[]; // Added raw reports for detailed analysis
 }
 
+export interface ComplianceAnalysisRequest {
+  report: ComplianceReport;
+  feederPointName?: string;
+}
+
 export class AIService {
+  static async analyzeReportCompliance(request: ComplianceAnalysisRequest): Promise<string> {
+    try {
+      const response = await fetch('/api/analyze-report', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      })
+
+      if (!response.ok) {
+        throw new Error(`API call failed with status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return data.analysis as string
+    } catch (error) {
+      console.error('Error calling /api/analyze-report:', error)
+      return this.simulateComplianceAnalysis(request)
+    }
+  }
 
   /**
    * Generate AI analysis by calling the server-side API route.
@@ -345,6 +371,84 @@ Today's operations processed ${totalReports} compliance reports, with a ${resolu
     `;
 
     return { detailed: detailedReport, summary: conciseSummary };
+  }
+
+  private static simulateComplianceAnalysis(request: ComplianceAnalysisRequest): string {
+    const { report, feederPointName } = request;
+    if (!report) {
+      return 'No report data was provided for analysis. Please re-open the record and try again.';
+    }
+
+    const labelize = (value?: string) =>
+      value
+        ? value
+            .split('_')
+            .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(' ')
+        : 'Not specified';
+
+    const formattedSubmittedAt = this.formatTimestamp(report.submittedAt);
+    const locationName = feederPointName || report.feederPointName || 'Feeder Point';
+    const inspector = report.userName || 'Unknown inspector';
+    const priorityLabel = labelize(report.priority);
+    const statusLabel = labelize(report.status);
+    const distance =
+      typeof report.distanceFromFeederPoint === 'number'
+        ? `Distance logged: ${Math.round(report.distanceFromFeederPoint)} meters from the feeder point.`
+        : null;
+
+    const attention: string[] = [];
+    const informational: string[] = [];
+    (report.answers || []).forEach(answer => {
+      const label = answer.description || labelize(answer.questionId);
+      const rawAnswer = typeof answer.answer === 'string' ? answer.answer : String(answer.answer);
+      const entry = `- ${label}: ${rawAnswer}${answer.notes ? ` (Notes: ${answer.notes})` : ''}`;
+      const normalized = rawAnswer.toLowerCase();
+
+      if (['no', 'requires_action', 'pending', 'delayed', 'issue', 'not available'].includes(normalized)) {
+        attention.push(entry);
+      } else {
+        informational.push(entry);
+      }
+    });
+
+    const adminNotes = report.adminNotes || report.description;
+
+    return [
+      `Simulated review for ${locationName}`,
+      `Status: ${statusLabel} | Priority: ${priorityLabel}`,
+      `Submitted by ${inspector} on ${formattedSubmittedAt}`,
+      distance,
+      attention.length > 0 ? `Items requiring attention:\n${attention.join('\n')}` : 'No critical issues were flagged in this submission.',
+      informational.length > 0 ? `Additional observations:\n${informational.join('\n')}` : null,
+      adminNotes ? `Field/Reviewer notes: ${adminNotes}` : null,
+      attention.length > 0
+        ? 'Recommended next steps:\n- Acknowledge the noted gaps with the field team.\n- Capture updated evidence once corrective actions are completed.'
+        : 'Recommended next steps:\n- Maintain current operating discipline and continue periodic monitoring.'
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  private static formatTimestamp(value: any): string {
+    if (!value) {
+      return 'Not specified';
+    }
+
+    let date: Date;
+    if (value instanceof Date) {
+      date = value;
+    } else if (typeof value === 'object' && typeof value.seconds === 'number') {
+      date = new Date(value.seconds * 1000);
+    } else {
+      date = new Date(value);
+    }
+
+    if (Number.isNaN(date.getTime())) {
+      return 'Not specified';
+    }
+
+    return date.toLocaleString();
   }
 
   /**

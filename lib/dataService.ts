@@ -587,6 +587,46 @@ export class DataService {
     return results.sort((a, b) => b.totalReports - a.totalReports);
   }
 
+  static async getFeederPointReports(feederPointId?: string, feederPointName?: string): Promise<ComplianceReport[]> {
+    if (!feederPointId && !feederPointName) {
+      return [];
+    }
+
+    const queries = [];
+    if (feederPointId) {
+      queries.push(query(collection(db, 'complianceReports'), where('feederPointId', '==', feederPointId)));
+    }
+    if (feederPointName) {
+      queries.push(query(collection(db, 'complianceReports'), where('feederPointName', '==', feederPointName)));
+    }
+
+    const reportsMap = new Map<string, ComplianceReport>();
+    for (const qRef of queries) {
+      const snapshot = await getDocs(qRef);
+      snapshot.docs.forEach(docSnapshot => {
+        const reportId = docSnapshot.id;
+        if (!reportsMap.has(reportId)) {
+          reportsMap.set(reportId, { id: reportId, ...docSnapshot.data() } as ComplianceReport);
+        }
+      });
+    }
+
+    const combined = Array.from(reportsMap.values());
+    return combined.sort((a, b) => {
+      const aDate =
+        DataService.coerceDate(a.submittedAt) ||
+        DataService.coerceDate(a.updatedAt) ||
+        DataService.coerceDate(a.createdAt);
+      const bDate =
+        DataService.coerceDate(b.submittedAt) ||
+        DataService.coerceDate(b.updatedAt) ||
+        DataService.coerceDate(b.createdAt);
+      const aTime = aDate ? aDate.getTime() : 0;
+      const bTime = bDate ? bDate.getTime() : 0;
+      return bTime - aTime;
+    });
+  }
+
   // Get all users
   static onUsersChange(callback: (users: User[]) => void) {
     const q = query(collection(db, 'approvedUsers'), orderBy('createdAt', 'desc'));
