@@ -19,6 +19,12 @@ export default function UsersPage() {
   const [departmentFilter, setDepartmentFilter] = useState('all')
   const [sortBy, setSortBy] = useState('createdAt')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [passwordSearchName, setPasswordSearchName] = useState('')
+  const [passwordSearchResult, setPasswordSearchResult] = useState<User | null>(null)
+  const [passwordResetInput, setPasswordResetInput] = useState('')
+  const [passwordActionStatus, setPasswordActionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [passwordFetchLoading, setPasswordFetchLoading] = useState(false)
+  const [passwordUpdateLoading, setPasswordUpdateLoading] = useState(false)
 
   useEffect(() => {
     const unsubscribe = DataService.onUsersChange(usersData => {
@@ -38,6 +44,95 @@ export default function UsersPage() {
     const usersData = await DataService.getAllUsers();
     setUsers(usersData);
     setLoading(false);
+  };
+
+  const handlePasswordUserLookup = async () => {
+    const searchName = passwordSearchName.trim();
+    setPasswordActionStatus(null);
+    setPasswordResetInput('');
+
+    if (!searchName) {
+      setPasswordSearchResult(null);
+      setPasswordActionStatus({ type: 'error', message: 'Please enter a name before searching.' });
+      return;
+    }
+
+    setPasswordFetchLoading(true);
+
+    try {
+      const normalizedSearch = searchName.toLowerCase();
+      const localMatches = users.filter(user => (user.name || '').trim().toLowerCase() === normalizedSearch);
+
+      if (localMatches.length === 1) {
+        setPasswordSearchResult(localMatches[0]);
+        setPasswordActionStatus({
+          type: 'success',
+          message: `Loaded ${localMatches[0].name}. Enter a new password to update their account.`
+        });
+        return;
+      }
+
+      if (localMatches.length > 1) {
+        setPasswordSearchResult(null);
+        setPasswordActionStatus({
+          type: 'error',
+          message: 'Multiple users share that name. Refine the search with the full name or include an identifier.'
+        });
+        return;
+      }
+
+      const userRecord = await DataService.findUserByName(searchName);
+
+      if (!userRecord) {
+        setPasswordSearchResult(null);
+        setPasswordActionStatus({ type: 'error', message: `No user found with the name "${searchName}".` });
+      } else {
+        setPasswordSearchResult(userRecord);
+        setPasswordActionStatus({
+          type: 'success',
+          message: `Loaded ${userRecord.name}. Enter a new password to update their account.`
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching user by name:', error);
+      setPasswordSearchResult(null);
+      setPasswordActionStatus({ type: 'error', message: 'Failed to fetch user. Please try again.' });
+    } finally {
+      setPasswordFetchLoading(false);
+    }
+  };
+
+  const handlePasswordUpdate = async () => {
+    if (!passwordSearchResult) {
+      setPasswordActionStatus({ type: 'error', message: 'Fetch a user before updating the password.' });
+      return;
+    }
+
+    const newPassword = passwordResetInput.trim();
+    if (!newPassword) {
+      setPasswordActionStatus({ type: 'error', message: 'Please enter a new password.' });
+      return;
+    }
+
+    setPasswordUpdateLoading(true);
+    setPasswordActionStatus(null);
+
+    try {
+      await DataService.updateUserPassword(passwordSearchResult.id, newPassword);
+      setPasswordActionStatus({
+        type: 'success',
+        message: `Password updated for ${passwordSearchResult.name}.`
+      });
+      setPasswordResetInput('');
+    } catch (error) {
+      console.error('Error updating user password:', error);
+      setPasswordActionStatus({
+        type: 'error',
+        message: 'Could not update password. Please try again.'
+      });
+    } finally {
+      setPasswordUpdateLoading(false);
+    }
   };
 
   const filterUsers = () => {
@@ -301,6 +396,85 @@ export default function UsersPage() {
             <Download className="h-4 w-4" />
             <span>Export Users</span>
           </button>
+        </div>
+      </div>
+
+      {/* Password Reset Section */}
+      <div className="card bg-white border border-blue-100 shadow-sm">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Reset User Password</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Search for a user by name to load their account details from Firebase and set a new password.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <div className="md:flex md:items-end md:space-x-4">
+            <div className="md:flex-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">User Name</label>
+              <input
+                type="text"
+                value={passwordSearchName}
+                onChange={(e) => setPasswordSearchName(e.target.value)}
+                placeholder="Enter the user's full name as stored in Firebase"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+            <div className="mt-3 md:mt-0">
+              <button
+                onClick={handlePasswordUserLookup}
+                disabled={passwordFetchLoading}
+                className="inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                {passwordFetchLoading ? 'Fetching...' : 'Fetch User'}
+              </button>
+            </div>
+          </div>
+
+          {passwordSearchResult && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              <p className="font-medium">{passwordSearchResult.name}</p>
+              <p>{passwordSearchResult.email || 'No email on record'}</p>
+              <p className="text-xs mt-1">ID: {passwordSearchResult.id}</p>
+            </div>
+          )}
+
+          {passwordSearchResult && (
+            <div className="md:flex md:items-end md:space-x-4">
+              <div className="md:flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                <input
+                  type="password"
+                  value={passwordResetInput}
+                  onChange={(e) => setPasswordResetInput(e.target.value)}
+                  placeholder="Enter new password"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div className="mt-3 md:mt-0">
+                <button
+                  onClick={handlePasswordUpdate}
+                  disabled={passwordUpdateLoading}
+                  className="inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 disabled:opacity-50"
+                >
+                  {passwordUpdateLoading ? 'Updating...' : 'Update Password'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {passwordActionStatus && (
+            <div
+              className={`rounded-md px-4 py-3 text-sm border ${passwordActionStatus.type === 'success'
+                ? 'bg-green-50 text-green-800 border-green-200'
+                : 'bg-red-50 text-red-800 border-red-200'
+                }`}
+            >
+              {passwordActionStatus.message}
+            </div>
+          )}
         </div>
       </div>
 

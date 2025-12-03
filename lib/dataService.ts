@@ -32,6 +32,7 @@ export interface User {
   isActive: boolean;
   createdAt: any;
   lastLogin?: any;
+  password?: string;
 }
 
 export interface ComplianceReport {
@@ -598,8 +599,13 @@ export class DataService {
 
   static async getFeederPointReports(
     feederPointId?: string,
-    options?: { fallbackName?: string; startDate?: Date; endDate?: Date }
+    options?: string | { fallbackName?: string; startDate?: Date; endDate?: Date }
   ): Promise<ComplianceReport[]> {
+    const normalizedOptions =
+      typeof options === 'string'
+        ? { fallbackName: options }
+        : options;
+
     const queries = [];
 
     if (feederPointId) {
@@ -608,9 +614,11 @@ export class DataService {
       );
     }
 
-    if (options?.fallbackName) {
+    if (normalizedOptions?.fallbackName) {
       queries.push(
-        getDocs(query(collection(db, 'complianceReports'), where('feederPointName', '==', options.fallbackName)))
+        getDocs(
+          query(collection(db, 'complianceReports'), where('feederPointName', '==', normalizedOptions.fallbackName))
+        )
       );
     }
 
@@ -618,10 +626,8 @@ export class DataService {
       return [];
     }
 
-    const [startDate, endDate] = [
-      options?.startDate ? new Date(options.startDate) : null,
-      options?.endDate ? new Date(options.endDate) : null,
-    ];
+    const startDate = normalizedOptions?.startDate ? new Date(normalizedOptions.startDate) : null;
+    const endDate = normalizedOptions?.endDate ? new Date(normalizedOptions.endDate) : null;
 
     const reportsMap = new Map<string, ComplianceReport>();
 
@@ -665,7 +671,6 @@ export class DataService {
       const bTime = bDate ? bDate.getTime() : 0;
       return bTime - aTime;
     });
-
     return reports;
   }
 
@@ -689,6 +694,39 @@ export class DataService {
       ...doc.data()
     } as User));
     return users;
+  }
+
+  static async findUserByName(name: string): Promise<User | null> {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return null;
+    }
+
+    // Try exact, case-sensitive match first for efficiency
+    const exactQuery = query(
+      collection(db, 'approvedUsers'),
+      where('name', '==', trimmedName),
+      limit(1)
+    );
+    const exactSnapshot = await getDocs(exactQuery);
+    if (!exactSnapshot.empty) {
+      const userDoc = exactSnapshot.docs[0];
+      return { id: userDoc.id, ...userDoc.data() } as User;
+    }
+
+    // Fall back to case-insensitive search by scanning the collection
+    const normalizedTarget = trimmedName.toLowerCase();
+    const snapshot = await getDocs(collection(db, 'approvedUsers'));
+    const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+
+    const caseInsensitiveMatch = users.find(user => (user.name || '').trim().toLowerCase() === normalizedTarget);
+    if (caseInsensitiveMatch) {
+      return caseInsensitiveMatch;
+    }
+
+    // Allow partial (contains) match as a last resort
+    const partialMatch = users.find(user => (user.name || '').toLowerCase().includes(normalizedTarget));
+    return partialMatch ?? null;
   }
 
   // Get all access requests
@@ -850,6 +888,32 @@ export class DataService {
     await deleteDoc(feederPointRef);
   }
 
+  static async deleteFeederPointAndReports(feederPointId?: string, feederPointName?: string): Promise<void> {
+    const deletions: Promise<any>[] = [];
+
+    if (feederPointId) {
+      const feederPointRef = doc(db, 'feederPoints', feederPointId);
+      deletions.push(deleteDoc(feederPointRef));
+    }
+
+    const reportQueries = [];
+    if (feederPointId) {
+      reportQueries.push(query(collection(db, 'complianceReports'), where('feederPointId', '==', feederPointId)));
+    }
+    if (feederPointName) {
+      reportQueries.push(query(collection(db, 'complianceReports'), where('feederPointName', '==', feederPointName)));
+    }
+
+    for (const qRef of reportQueries) {
+      const snap = await getDocs(qRef);
+      snap.forEach(docSnap => {
+        deletions.push(deleteDoc(doc(db, 'complianceReports', docSnap.id)));
+      });
+    }
+
+    await Promise.all(deletions);
+  }
+
   static async createSampleFeederPoints(): Promise<void> {
     const samplePoints = [
       { name: 'FP-001', status: 'active', priority: 'high', location: { address: '123 Main St', latitude: 34.0522, longitude: -118.2437 } },
@@ -972,6 +1036,11 @@ export class DataService {
   static async updateUser(id: string, data: Partial<User>): Promise<void> {
     const userRef = doc(db, 'approvedUsers', id);
     await updateDoc(userRef, data);
+  }
+
+  static async updateUserPassword(id: string, password: string): Promise<void> {
+    const userRef = doc(db, 'approvedUsers', id);
+    await updateDoc(userRef, { password });
   }
 
   static async deleteUser(id: string): Promise<void> {

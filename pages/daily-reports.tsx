@@ -64,6 +64,7 @@ const YES_ANSWER_VALUES = new Set(['yes', 'y', 'true', '✔️', '✅'])
 const NO_ANSWER_VALUES = new Set(['no', 'n', 'false', '❌', '✖️'])
 const HIDDEN_QUESTION_CHART_IDS = new Set(['visible_signboard', 'overall_compliance_rating'])
 const SWACH_QUESTION_ID = 'swatch_workers_count'
+const SWACH_TRIP_UNKNOWN_KEY = '__swach_trip_unknown__'
 
 const QUESTION_METADATA: Record<string, { label: string; icon: LucideIcon }> = {}
 
@@ -260,6 +261,34 @@ const slugifyQuestionId = (value: string) => {
     .replace(/^_+|_+$/g, '')
 }
 
+const sanitizeFilenameSegment = (value: string, fallback = 'value') => {
+  if (!value) return fallback
+  const sanitized = value
+    .toString()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+  return sanitized || fallback
+}
+
+const ZONE_QUESTION_KEYS = ['Q1', 'q1', 'q1_zone_name', 'zone_name']
+const ZONE_QUESTION_SLUGS = new Set(
+  ZONE_QUESTION_KEYS.map(key => slugifyQuestionId(key)).filter((key): key is string => Boolean(key))
+)
+
+const getReportZoneInfo = (report: ComplianceReport) => {
+  if (!report.answers?.length) return null
+  const zoneAnswer = report.answers.find(answer => {
+    if (!answer.questionId) return false
+    const slug = slugifyQuestionId(answer.questionId)
+    return ZONE_QUESTION_SLUGS.has(slug)
+  })
+  if (!zoneAnswer) return null
+  const normalized = normalizeAnswerValue(zoneAnswer.answer)
+  const label = formatAnswerDisplay(zoneAnswer.answer, normalized)
+  return { normalized, label }
+}
+
 const MEMBER_QUESTION_ALIAS_MAP = new Map<string, string>()
 MEMBER_QUESTION_CONFIG.forEach(question => {
   const keys = [question.id, ...(question.aliases ?? [])]
@@ -384,6 +413,75 @@ function MemberAnswerCell({ answers }: { answers?: MemberQuestionAnswerCount[] }
   )
 }
 
+const reportHasSwachAnswer = (report: ComplianceReport) => {
+  return (
+    report.answers?.some(answer => {
+      if (!answer.questionId) return false
+      const questionSlug = slugifyQuestionId(answer.questionId)
+      const canonicalId = MEMBER_QUESTION_ALIAS_MAP.get(questionSlug)
+      return canonicalId === SWACH_QUESTION_ID
+    }) ?? false
+  )
+}
+
+const getTripKey = (tripNumber: ComplianceReport['tripNumber']) => {
+  if (tripNumber === null || tripNumber === undefined) {
+    return SWACH_TRIP_UNKNOWN_KEY
+  }
+  const normalized = `${tripNumber}`.trim()
+  return normalized || SWACH_TRIP_UNKNOWN_KEY
+}
+
+const getTripLabel = (tripKey: string) => {
+  return tripKey === SWACH_TRIP_UNKNOWN_KEY ? 'Unspecified Trip' : `Trip ${tripKey}`
+}
+
+const buildSwachExcelRows = (reports: ComplianceReport[]): Array<Record<string, string | number>> => {
+  if (!reports?.length) return []
+
+  const feederMap = new Map<string, Map<string, number>>()
+  const tripKeys = new Set<string>()
+
+  reports.forEach(report => {
+    if (!reportHasSwachAnswer(report)) return
+
+    const feederName = report.feederPointName?.trim() || 'Unknown Feeder Point'
+    const tripKey = getTripKey(report.tripNumber)
+
+    tripKeys.add(tripKey)
+
+    if (!feederMap.has(feederName)) {
+      feederMap.set(feederName, new Map())
+    }
+
+    const tripCounts = feederMap.get(feederName)!
+    tripCounts.set(tripKey, (tripCounts.get(tripKey) || 0) + 1)
+  })
+
+  if (!feederMap.size) {
+    return []
+  }
+
+  const sortedTripKeys = Array.from(tripKeys).sort((a, b) => {
+    if (a === SWACH_TRIP_UNKNOWN_KEY) return 1
+    if (b === SWACH_TRIP_UNKNOWN_KEY) return -1
+    return Number(a) - Number(b)
+  })
+
+  return Array.from(feederMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([feederName, tripCounts]) => {
+      const row: Record<string, string | number> = { 'Feeder Point': feederName }
+      sortedTripKeys.forEach(tripKey => {
+        row[getTripLabel(tripKey)] = tripCounts.get(tripKey) ?? 0
+      })
+      if (!sortedTripKeys.length) {
+        row['Unspecified Trip'] = tripCounts.get(SWACH_TRIP_UNKNOWN_KEY) ?? 0
+      }
+      return row
+    })
+}
+
 const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown[] => {
   if (!reports?.length) return []
 
@@ -453,6 +551,383 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
   }, [])
 }
 
+type WhatsappDescriptorKey = 'excellent' | 'strong' | 'moderate' | 'attention' | 'critical'
+
+interface WhatsappCategoryDetailArgs {
+  positive: number
+  negative: number
+  breakdown: QuestionBreakdown
+}
+
+interface WhatsappCategoryConfig {
+  id: string
+  label: string
+  narrativeLabel?: string
+  positiveValues: string[]
+  negativeValues?: string[]
+  positiveLabel: string
+  negativeLabel: string
+  descriptorOverrides?: Partial<Record<WhatsappDescriptorKey, string>>
+  detailFormatter?: (args: WhatsappCategoryDetailArgs) => string
+}
+
+interface WhatsappLineSummary {
+  label: string
+  narrativeLabel: string
+  descriptorKey: WhatsappDescriptorKey
+  line: string
+}
+
+const WHATSAPP_DESCRIPTOR_SCALE: Array<{ threshold: number; key: WhatsappDescriptorKey; label: string }> = [
+  { threshold: 0.8, key: 'excellent', label: 'Very good' },
+  { threshold: 0.65, key: 'strong', label: 'Strong' },
+  { threshold: 0.5, key: 'moderate', label: 'Moderate' },
+  { threshold: 0.35, key: 'attention', label: 'Needs attention' },
+  { threshold: 0, key: 'critical', label: 'Critical' },
+]
+
+const WHATSAPP_CORE_CATEGORIES: WhatsappCategoryConfig[] = [
+  {
+    id: 'scp_area_clean',
+    label: 'SCP Cleanliness',
+    narrativeLabel: 'cleanliness',
+    positiveValues: ['yes', 'clean', 'good'],
+    negativeValues: ['no', 'unclean', 'not clean', 'dirty'],
+    positiveLabel: 'clean',
+    negativeLabel: 'unclean',
+  },
+  {
+    id: 'surrounding_area_maintained',
+    label: 'Surroundings',
+    narrativeLabel: 'surroundings',
+    positiveValues: ['maintained', 'clean', 'clear', 'good'],
+    negativeValues: ['not maintained', 'not clean', 'dirty', 'unclean', 'clogged'],
+    positiveLabel: 'maintained',
+    negativeLabel: 'not maintained',
+  },
+  {
+    id: 'drains_clean',
+    label: 'Drains',
+    narrativeLabel: 'drains',
+    positiveValues: ['clean', 'clear', 'desilted'],
+    negativeValues: ['dirty', 'clogged', 'not clean', 'blocked'],
+    positiveLabel: 'clean',
+    negativeLabel: 'not clean',
+  },
+  {
+    id: 'waste_segregated',
+    label: 'Segregation',
+    narrativeLabel: 'segregation',
+    positiveValues: ['yes', 'segregated', 'proper'],
+    negativeValues: ['no', 'mixed', 'not segregated'],
+    positiveLabel: 'segregated',
+    negativeLabel: 'not segregated',
+  },
+  {
+    id: 'waste_volume_reasonable',
+    label: 'Waste Volume',
+    narrativeLabel: 'waste volume',
+    positiveValues: ['reasonable', 'low', 'normal'],
+    negativeValues: ['high', 'overflow', 'excess'],
+    positiveLabel: 'reasonable',
+    negativeLabel: 'high',
+  },
+]
+
+const sumMatchingAnswers = (breakdown: QuestionBreakdown, keywords?: string[]) => {
+  if (!keywords?.length) return 0
+  const normalizedKeywords = keywords.map(keyword => keyword.toLowerCase())
+  return breakdown.answers.reduce((sum, answer) => {
+    if (normalizedKeywords.some(keyword => answer.normalized.includes(keyword))) {
+      return sum + answer.value
+    }
+    return sum
+  }, 0)
+}
+
+const describePerformanceLevel = (
+  positiveCount: number,
+  denominator: number,
+  overrides?: Partial<Record<WhatsappDescriptorKey, string>>
+): { key: WhatsappDescriptorKey; label: string } => {
+  const safeDenominator = denominator > 0 ? denominator : 1
+  const ratio = positiveCount / safeDenominator
+  for (const level of WHATSAPP_DESCRIPTOR_SCALE) {
+    if (ratio >= level.threshold) {
+      return {
+        key: level.key,
+        label: overrides?.[level.key] || level.label,
+      }
+    }
+  }
+  return { key: 'critical', label: overrides?.critical || 'Critical' }
+}
+
+const formatSiteCount = (count: number, description: string) => {
+  return `${count} site${count === 1 ? '' : 's'} ${description}`
+}
+
+const formatListForSentence = (items: string[]) => {
+  if (!items.length) return ''
+  if (items.length === 1) return items[0]
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+}
+
+const summarizeAnswersForWhatsapp = (breakdown: QuestionBreakdown, maxEntries = 3) => {
+  if (!breakdown.answers?.length) {
+    const total = breakdown.totalResponses || 0
+    return total ? `${total} responses recorded` : 'No responses recorded'
+  }
+
+  const topAnswers = breakdown.answers.slice(0, maxEntries)
+  const summaryParts = topAnswers.map(answer => `${answer.value} ${answer.label}`)
+  const accounted = topAnswers.reduce((sum, answer) => sum + answer.value, 0)
+  const remaining = Math.max(breakdown.totalResponses - accounted, 0)
+  if (remaining > 0) {
+    summaryParts.push(`${remaining} other${remaining === 1 ? '' : 's'}`)
+  }
+
+  return `${summaryParts.join(' | ')} (${breakdown.totalResponses} total)`
+}
+
+const buildCoreCategorySummaries = (questionBreakdowns: QuestionBreakdown[]): WhatsappLineSummary[] => {
+  return WHATSAPP_CORE_CATEGORIES.map(config => {
+    const breakdown = questionBreakdowns.find(entry => entry.id === config.id)
+    if (!breakdown || !breakdown.totalResponses) {
+      return null
+    }
+
+    const positive = sumMatchingAnswers(breakdown, config.positiveValues)
+    const negativeByKeywords = config.negativeValues?.length ? sumMatchingAnswers(breakdown, config.negativeValues) : 0
+    const matched = positive + negativeByKeywords
+    const negative =
+      matched >= breakdown.totalResponses
+        ? negativeByKeywords
+        : negativeByKeywords + Math.max(breakdown.totalResponses - matched, 0)
+    const denominator = positive + negative
+    if (!denominator) {
+      return null
+    }
+
+    const descriptor = describePerformanceLevel(positive, denominator, config.descriptorOverrides)
+    const detailText = config.detailFormatter
+      ? config.detailFormatter({ positive, negative, breakdown })
+      : summarizeAnswersForWhatsapp(breakdown)
+
+    return {
+      label: config.label,
+      narrativeLabel: config.narrativeLabel || config.label.toLowerCase(),
+      descriptorKey: descriptor.key,
+      line: `- ${config.label}: ${descriptor.label} - ${detailText}.`,
+    }
+  }).filter(Boolean) as WhatsappLineSummary[]
+}
+
+const buildWorkerSummary = (breakdown?: QuestionBreakdown | null): WhatsappLineSummary | null => {
+  if (!breakdown || !breakdown.totalResponses) {
+    return null
+  }
+
+  let zero = 0
+  let oneToThree = 0
+  let fourPlus = 0
+  let unspecified = 0
+
+  breakdown.answers.forEach(answer => {
+    const normalized = answer.normalized
+    const numericMatch = normalized.match(/-?\d+(\.\d+)?/)
+    let value: number | null = numericMatch ? Number(numericMatch[0]) : null
+    if (Number.isNaN(value)) {
+      value = null
+    }
+
+    if (value === null) {
+      if (normalized.includes('no') || normalized.includes('none') || normalized.includes('nil') || normalized.includes('zero')) {
+        value = 0
+      } else if (normalized.includes('one')) {
+        value = 1
+      } else if (normalized.includes('two')) {
+        value = 2
+      } else if (normalized.includes('three')) {
+        value = 3
+      }
+    }
+
+    if (value === null) {
+      unspecified += answer.value
+      return
+    }
+
+    if (value <= 0) {
+      zero += answer.value
+    } else if (value <= 3) {
+      oneToThree += answer.value
+    } else {
+      fourPlus += answer.value
+    }
+  })
+
+  const denominator = zero + oneToThree + fourPlus
+  if (!denominator) {
+    return null
+  }
+  const positive = oneToThree + fourPlus
+  const descriptor = describePerformanceLevel(positive, denominator, {
+    excellent: 'Fully staffed',
+    strong: 'Stable coverage',
+    moderate: 'Low availability',
+    attention: 'Very low availability',
+    critical: 'No workforce',
+  })
+
+  const detailParts: string[] = []
+  if (zero) detailParts.push(formatSiteCount(zero, 'with 0 workers'))
+  if (oneToThree) detailParts.push(formatSiteCount(oneToThree, 'with 1-3 workers'))
+  if (fourPlus) detailParts.push(formatSiteCount(fourPlus, 'with 4+ workers'))
+  if (unspecified) detailParts.push(formatSiteCount(unspecified, 'not reported'))
+  const details = detailParts.join('; ') || 'No worker data captured'
+
+  return {
+    label: 'Workers',
+    narrativeLabel: 'worker availability',
+    descriptorKey: descriptor.key,
+    line: `- Workers: ${descriptor.label} - ${details}.`,
+  }
+}
+
+const buildWasteCollectionSummary = (breakdown?: QuestionBreakdown | null): WhatsappLineSummary | null => {
+  if (!breakdown || !breakdown.totalResponses) {
+    return null
+  }
+
+  const positive = sumMatchingAnswers(breakdown, ['collected', 'cleared', 'vehicle left', 'completed', 'done'])
+  const negative = sumMatchingAnswers(breakdown, ['waiting', 'pending', 'not', 'delay', 'delayed'])
+  const denominator = positive + negative || breakdown.totalResponses
+  const descriptor = describePerformanceLevel(positive, denominator, {
+    excellent: 'Smooth',
+    strong: 'Mostly smooth',
+    moderate: 'Mixed',
+    attention: 'Delays noted',
+    critical: 'Stalled',
+  })
+
+  const topAnswers = breakdown.answers.slice(0, 3).map(answer => `${answer.value} ${answer.label.toLowerCase()}`)
+  const details = topAnswers.length ? topAnswers.join('; ') : `${breakdown.totalResponses} updates logged`
+
+  return {
+    label: 'Waste Collection',
+    narrativeLabel: 'waste pickup',
+    descriptorKey: descriptor.key,
+    line: `- Waste Collection: ${descriptor.label} - ${details}.`,
+  }
+}
+
+const buildOverallNarrative = (summaries: WhatsappLineSummary[]) => {
+  if (!summaries.length) {
+    return ''
+  }
+
+  const strong = summaries
+    .filter(summary => summary.descriptorKey === 'excellent' || summary.descriptorKey === 'strong')
+    .map(summary => summary.narrativeLabel)
+  const mixed = summaries.filter(summary => summary.descriptorKey === 'moderate').map(summary => summary.narrativeLabel)
+  const weak = summaries
+    .filter(summary => summary.descriptorKey === 'attention' || summary.descriptorKey === 'critical')
+    .map(summary => summary.narrativeLabel)
+
+  const parts: string[] = []
+  if (strong.length) {
+    parts.push(`Trip performance is strong in ${formatListForSentence(strong)}.`)
+  }
+  if (mixed.length) {
+    parts.push(`${formatListForSentence(mixed)} show mixed results.`)
+  }
+  if (weak.length) {
+    parts.push(`${formatListForSentence(weak)} need attention.`)
+  }
+
+  return parts.join(' ')
+}
+
+interface WhatsappReportParams {
+  reportSummary: ReportSummary | null
+  questionBreakdowns: QuestionBreakdown[]
+  zoneFilter: 'all' | string
+  zoneOptions: Array<{ value: string; label: string }>
+  filterTrip: 'all' | 1 | 2 | 3
+  useCustomRange: boolean
+  startDate: string
+  endDate: string
+  selectedDate: string
+}
+
+const buildWhatsappShortReport = ({
+  reportSummary,
+  questionBreakdowns,
+  zoneFilter,
+  zoneOptions,
+  filterTrip,
+  useCustomRange,
+  startDate,
+  endDate,
+  selectedDate,
+}: WhatsappReportParams) => {
+  if (!reportSummary || reportSummary.total === 0) {
+    return ''
+  }
+
+  const zoneLabel =
+    zoneFilter === 'all'
+      ? 'All Zones'
+      : zoneOptions.find(option => option.value === zoneFilter)?.label || `Zone ${zoneFilter}`
+  const tripLabel = filterTrip === 'all' ? 'All Trips' : `Trip ${filterTrip}`
+  const resolvedStart = startDate || selectedDate
+  const resolvedEnd = endDate || resolvedStart
+  const dateLabel =
+    useCustomRange && resolvedStart && resolvedEnd
+      ? resolvedStart === resolvedEnd
+        ? resolvedStart
+        : `${resolvedStart} to ${resolvedEnd}`
+      : selectedDate
+
+  const lines: string[] = [`${zoneLabel} | ${tripLabel} - Concise Report (${dateLabel})`]
+  const statusParts: string[] = [`${reportSummary.approved}/${reportSummary.total} Approved`, `${reportSummary.rejected} Rejected`]
+  if (reportSummary.actionRequired) {
+    statusParts.push(`${reportSummary.actionRequired} Requires Action`)
+  }
+  if (reportSummary.pending) {
+    statusParts.push(`${reportSummary.pending} Pending`)
+  }
+  lines.push(statusParts.join(' | '))
+
+  const categorySummaries = buildCoreCategorySummaries(questionBreakdowns)
+  const workerSummary = buildWorkerSummary(questionBreakdowns.find(entry => entry.id === SWACH_QUESTION_ID))
+  const wasteSummary = buildWasteCollectionSummary(
+    questionBreakdowns.find(entry => entry.id === 'waste_collection_status')
+  )
+  const keySummaries: WhatsappLineSummary[] = [
+    ...categorySummaries,
+    ...(workerSummary ? [workerSummary] : []),
+    ...(wasteSummary ? [wasteSummary] : []),
+  ]
+
+  if (keySummaries.length) {
+    lines.push('', 'Key Field Updates:')
+    keySummaries.forEach(summary => lines.push(summary.line))
+  }
+
+  const overallNarrative = buildOverallNarrative(
+    keySummaries.filter(Boolean) as WhatsappLineSummary[]
+  )
+
+  if (overallNarrative) {
+    lines.push('', 'Overall:', overallNarrative)
+  }
+
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export default function DailyReportsPage() {
   const { user } = useAuth()
   const [reports, setReports] = useState<ComplianceReport[]>([])
@@ -462,6 +937,9 @@ export default function DailyReportsPage() {
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
   const [filterStatus, setFilterStatus] = useState<ComplianceReport['status'] | 'all'>('all')
+  const [filterTrip, setFilterTrip] = useState<'all' | 1 | 2 | 3>('all')
+  const [zoneFilter, setZoneFilter] = useState<'all' | string>('all')
+  const [zoneOptions, setZoneOptions] = useState<Array<{ value: string; label: string }>>([])
   const [generatingAI, setGeneratingAI] = useState(false)
   const [selectedReport, setSelectedReport] = useState<ComplianceReport | null>(null)
   const [adminNotes, setAdminNotes] = useState('')
@@ -481,6 +959,21 @@ export default function DailyReportsPage() {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [swachFeederFilter, setSwachFeederFilter] = useState<'all' | string>('all')
   const [swachTripFilter, setSwachTripFilter] = useState<'all' | ComplianceReport['tripNumber']>('all')
+  
+  const dateRangeLabel = useMemo(() => {
+    if (useCustomRange && startDate && endDate) {
+      const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
+      return sanitizeFilenameSegment(`${rangeStart}_to_${rangeEnd}`, selectedDate)
+    }
+    return sanitizeFilenameSegment(selectedDate, selectedDate)
+  }, [useCustomRange, startDate, endDate, selectedDate])
+  const zoneLabelForFilename = useMemo(() => {
+    if (zoneFilter === 'all') {
+      return 'All_Zones'
+    }
+    const option = zoneOptions.find(option => option.value === zoneFilter)
+    return sanitizeFilenameSegment(option?.label || zoneFilter, 'Zone')
+  }, [zoneFilter, zoneOptions])
   const captureSummarySnapshot = async () => {
     if (!summaryRef.current) return null
     const scale = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2
@@ -492,8 +985,89 @@ export default function DailyReportsPage() {
     const imgData = canvas.toDataURL('image/png')
     return { canvas, imgData }
   }
+  const captureSummarySections = async () => {
+    if (!summaryRef.current) return []
+    const targets = summaryRef.current.querySelectorAll<HTMLElement>('[data-pdf-section]')
+    const elements = targets.length ? Array.from(targets) : [summaryRef.current]
+    const scale = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2
+    const snapshots: Array<{ imgData: string; width: number; height: number }> = []
+
+    for (const element of elements) {
+      const canvas = await html2canvas(element, {
+        scale,
+        scrollY: typeof window !== 'undefined' ? -window.scrollY : 0,
+        backgroundColor: '#ffffff'
+      })
+      snapshots.push({
+        imgData: canvas.toDataURL('image/png'),
+        width: canvas.width,
+        height: canvas.height,
+      })
+    }
+
+    return snapshots
+  }
 
   const conciseSummaryPoints = useMemo(() => buildSummaryPoints(dailyAiSummary), [dailyAiSummary])
+  const summaryFeederHighlights = useMemo(() => {
+    if (!dailyAiSummary || !reports.length) {
+      return []
+    }
+
+    const feederMap = new Map<
+      string,
+      {
+        feeder: string
+        zoneLabel: string
+        trips: Map<string, string>
+      }
+    >()
+
+    reports.forEach(report => {
+      const feederName = report.feederPointName?.trim() || 'Unknown Feeder Point'
+      const zoneInfo = getReportZoneInfo(report)
+      const zoneLabel = zoneInfo?.label || 'Zone Not Provided'
+      if (!feederMap.has(feederName)) {
+        feederMap.set(feederName, {
+          feeder: feederName,
+          zoneLabel,
+          trips: new Map<string, string>(),
+        })
+      } else if (zoneInfo?.label) {
+        const existing = feederMap.get(feederName)!
+        if (existing.zoneLabel === 'Zone Not Provided') {
+          existing.zoneLabel = zoneInfo.label
+        }
+      }
+
+      const detail = feederMap.get(feederName)!
+      const tripKey = getTripKey(report.tripNumber)
+      detail.trips.set(tripKey, getTripLabel(tripKey))
+    })
+
+    const sortTripKeys = (a: string, b: string) => {
+      if (a === SWACH_TRIP_UNKNOWN_KEY) return 1
+      if (b === SWACH_TRIP_UNKNOWN_KEY) return -1
+      const aNum = Number(a)
+      const bNum = Number(b)
+      if (Number.isNaN(aNum) && Number.isNaN(bNum)) {
+        return a.localeCompare(b)
+      }
+      if (Number.isNaN(aNum)) return 1
+      if (Number.isNaN(bNum)) return -1
+      return aNum - bNum
+    }
+
+    return Array.from(feederMap.values())
+      .map(detail => ({
+        feeder: detail.feeder,
+        zoneLabel: detail.zoneLabel,
+        trips: Array.from(detail.trips.entries())
+          .sort((a, b) => sortTripKeys(a[0], b[0]))
+          .map(([, label]) => label),
+      }))
+      .sort((a, b) => a.feeder.localeCompare(b.feeder))
+  }, [dailyAiSummary, reports])
   const swachFilterOptions = useMemo(() => {
     const feeders = new Set<string>()
     const trips = new Set<ComplianceReport['tripNumber']>()
@@ -536,6 +1110,7 @@ export default function DailyReportsPage() {
       answers: [],
     }
   }, [filteredSwachReports, swachFeederFilter, swachTripFilter])
+  const swachExcelRows = useMemo(() => buildSwachExcelRows(filteredSwachReports), [filteredSwachReports])
   const questionBreakdowns = useMemo(() => {
     const patched = baseQuestionBreakdowns.map(breakdown => {
       if (breakdown.id === SWACH_QUESTION_ID && swachFilteredBreakdown) {
@@ -548,6 +1123,31 @@ export default function DailyReportsPage() {
     }
     return patched.filter(breakdown => !HIDDEN_QUESTION_CHART_IDS.has(breakdown.id))
   }, [baseQuestionBreakdowns, swachFilteredBreakdown])
+  const whatsappReportText = useMemo(
+    () =>
+      buildWhatsappShortReport({
+        reportSummary,
+        questionBreakdowns,
+        zoneFilter,
+        zoneOptions,
+        filterTrip,
+        useCustomRange,
+        startDate,
+        endDate,
+        selectedDate,
+      }),
+    [
+      reportSummary,
+      questionBreakdowns,
+      zoneFilter,
+      zoneOptions,
+      filterTrip,
+      useCustomRange,
+      startDate,
+      endDate,
+      selectedDate,
+    ]
+  )
   const memberQuestionStats = useMemo(() => buildMemberQuestionStats(reports), [reports])
   const selectedMember = useMemo(
     () => memberQuestionStats.find(member => member.memberId === selectedMemberId) || null,
@@ -578,29 +1178,48 @@ export default function DailyReportsPage() {
   }
 
   const handleDownloadPdf = async () => {
-    const snapshot = await captureSummarySnapshot()
-    if (!snapshot) return
+    const sections = await captureSummarySections()
+    if (!sections.length) return
 
     const pdf = new jsPDF('p', 'mm', 'a4');
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
-    const canvasWidth = snapshot.canvas.width;
-    const canvasHeight = snapshot.canvas.height;
-    const ratio = canvasWidth / pdfWidth;
-    const imgHeight = canvasHeight / ratio;
-    let heightLeft = imgHeight;
-    let position = 0;
+    const marginX = 10;
+    const marginY = 10;
+    const contentWidth = pdfWidth - marginX * 2;
+    const contentHeight = pdfHeight - marginY * 2;
+    const sectionSpacing = 6;
+    let currentY = 0;
 
-    pdf.addImage(snapshot.imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-    heightLeft -= pdfHeight;
+    sections.forEach((section, index) => {
+      let renderWidth = contentWidth;
+      let renderHeight = (section.height * renderWidth) / section.width;
 
-    while (heightLeft > 0) {
-      position -= pdfHeight;
-      pdf.addPage();
-      pdf.addImage(snapshot.imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-      heightLeft -= pdfHeight;
-    }
-    pdf.save(`Daily_AI_Concise_Summary_${selectedDate}.pdf`);
+      if (renderHeight > contentHeight) {
+        const scaleFactor = contentHeight / renderHeight;
+        renderWidth *= scaleFactor;
+        renderHeight = contentHeight;
+      }
+
+      if (currentY > 0 && currentY + renderHeight > contentHeight) {
+        pdf.addPage();
+        currentY = 0;
+      }
+
+      const xPosition = marginX + (contentWidth - renderWidth) / 2;
+      const yPosition = marginY + currentY;
+
+      pdf.addImage(section.imgData, 'PNG', xPosition, yPosition, renderWidth, renderHeight);
+
+      currentY += renderHeight + sectionSpacing;
+
+      if (index < sections.length - 1 && currentY > contentHeight) {
+        pdf.addPage();
+        currentY = 0;
+      }
+    });
+
+    pdf.save(`Daily_AI_Concise_Summary_${dateRangeLabel}_${zoneLabelForFilename}.pdf`);
   };
 
   const handleDownloadPpt = async () => {
@@ -614,7 +1233,22 @@ export default function DailyReportsPage() {
     const slideHeight = pptx.presLayout.height
 
     slide.addImage({ data: snapshot.imgData, x: 0, y: 0, w: slideWidth, h: slideHeight })
-    await pptx.writeFile({ fileName: `Daily_AI_Concise_Summary_${selectedDate}.pptx` })
+    await pptx.writeFile({ fileName: `Daily_AI_Concise_Summary_${dateRangeLabel}_${zoneLabelForFilename}.pptx` })
+  }
+
+  const handleDownloadSwachExcel = async () => {
+    if (!swachExcelRows.length) return
+
+    const XLSX = await import('xlsx')
+    const worksheet = XLSX.utils.json_to_sheet(swachExcelRows)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Swach Workers')
+
+    const feederSuffix =
+      swachFeederFilter !== 'all' ? `_${slugifyQuestionId(swachFeederFilter)}` : ''
+    const zoneSuffix = zoneLabelForFilename ? `_${zoneLabelForFilename}` : ''
+
+    XLSX.writeFile(workbook, `swach-workers-${dateRangeLabel || 'report'}${feederSuffix}${zoneSuffix}.xlsx`)
   }
 
   const summaryReportPieData = useMemo(() => {
@@ -678,6 +1312,12 @@ export default function DailyReportsPage() {
   }, [swachFilterOptions, swachFeederFilter, swachTripFilter])
 
   useEffect(() => {
+    if (zoneFilter !== 'all' && !zoneOptions.some(option => option.value === zoneFilter)) {
+      setZoneFilter('all')
+    }
+  }, [zoneOptions, zoneFilter])
+
+  useEffect(() => {
     setLoading(true)
     const unsubscribe = DataService.onComplianceReportsChange(allReports => {
       console.log("All Compliance Reports (real-time):", allReports)
@@ -691,9 +1331,33 @@ export default function DailyReportsPage() {
         return reportDate === selectedDate
       })
 
+      const zoneMap = new Map<string, string>()
+      filteredReports.forEach(report => {
+        const zoneInfo = getReportZoneInfo(report)
+        if (zoneInfo && !zoneMap.has(zoneInfo.normalized)) {
+          zoneMap.set(zoneInfo.normalized, zoneInfo.label)
+        }
+      })
+      const zoneOptionList = Array.from(zoneMap.entries())
+        .map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label))
+      setZoneOptions(zoneOptionList)
+
       // Apply status filter
       if (filterStatus !== 'all') {
         filteredReports = filteredReports.filter(report => report.status === filterStatus)
+      }
+
+      // Apply trip filter
+      if (filterTrip !== 'all') {
+        filteredReports = filteredReports.filter(report => report.tripNumber === filterTrip)
+      }
+
+      if (zoneFilter !== 'all') {
+        filteredReports = filteredReports.filter(report => {
+          const zoneInfo = getReportZoneInfo(report)
+          return zoneInfo?.normalized === zoneFilter
+        })
       }
 
       console.log("Filtered Compliance Reports (real-time):", filteredReports)
@@ -713,7 +1377,7 @@ export default function DailyReportsPage() {
     })
 
     return () => unsubscribe()
-  }, [selectedDate, filterStatus, useCustomRange, startDate, endDate]) // Add filterStatus to dependency array
+  }, [selectedDate, filterStatus, filterTrip, zoneFilter, useCustomRange, startDate, endDate])
 
   useEffect(() => {
     if (!useCustomRange) {
@@ -864,6 +1528,25 @@ export default function DailyReportsPage() {
     setEndDate(value)
     if (startDate && value < startDate) {
       setStartDate(value)
+    }
+  }
+
+  const handleShareWhatsappReport = async () => {
+    if (!whatsappReportText) {
+      return
+    }
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(whatsappReportText)
+      }
+    } catch (error) {
+      console.warn('Failed to copy WhatsApp short report to clipboard:', error)
+    }
+
+    if (typeof window !== 'undefined') {
+      const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(whatsappReportText)}`
+      window.open(whatsappUrl, '_blank')
     }
   }
 
@@ -1032,7 +1715,7 @@ export default function DailyReportsPage() {
               />
             )}
 
-            <div className="relative"> {/* Added wrapper div */}
+            <div className="relative">
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value as ComplianceReport['status'] | 'all')}
@@ -1045,6 +1728,37 @@ export default function DailyReportsPage() {
                 <option value="requires_action">Action Required</option>
               </select>
             </div>
+
+            <div className="relative">
+              <select
+                value={filterTrip}
+                onChange={(e) => setFilterTrip(e.target.value === 'all' ? 'all' : Number(e.target.value) as 1 | 2 | 3)}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">All Trips</option>
+                <option value="1">Trip 1</option>
+                <option value="2">Trip 2</option>
+                <option value="3">Trip 3</option>
+              </select>
+            </div>
+
+           <div className="relative">
+              <select
+                value={zoneFilter}
+                onChange={(e) => setZoneFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">All Zones</option>
+                {zoneOptions.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+         
+            
+           
           </div>
         </div>
       </div>
@@ -1129,6 +1843,14 @@ export default function DailyReportsPage() {
               <Sparkles className="h-4 w-4" />
               <span>{generatingAI && selectedAnalysisType === 'summary' ? 'Analyzing...' : 'Generate Concise AI Summary'}</span>
             </button>
+            <button
+              onClick={handleShareWhatsappReport}
+              disabled={!whatsappReportText}
+              className="flex-1 btn-secondary flex items-center justify-center space-x-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Send className="h-4 w-4" />
+              <span>WhatsApp Short Report</span>
+            </button>
           </div>
           {dailyAiDetailedAnalysis && selectedAnalysisType === 'detailed' && (
             <div className="bg-gray-50 rounded-lg p-4 mb-4">
@@ -1143,7 +1865,7 @@ export default function DailyReportsPage() {
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `Daily_AI_Detailed_Analysis_${selectedDate}.txt`;
+                    a.download = `Daily_AI_Detailed_Analysis_${dateRangeLabel}_${zoneLabelForFilename}.txt`;
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
@@ -1159,23 +1881,55 @@ export default function DailyReportsPage() {
           )}
           {dailyAiSummary && selectedAnalysisType === 'summary' && (
             <div ref={summaryRef} className="bg-gray-50 rounded-lg p-4">
-              <h4 className="text-md font-semibold text-gray-900 mb-2">Concise Summary:</h4>
-              {conciseSummaryPoints.length > 0 ? (
-                <ul className="space-y-3 text-sm text-gray-800">
-                  {conciseSummaryPoints.map((point, index) => (
-                    <li key={`${point}-${index}`} className="flex items-start space-x-2">
-                      <Bot className="h-4 w-4 mt-0.5 text-gray-500" />
-                      <span>{point}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
-                  {dailyAiSummary}
-                </pre>
+              <div data-pdf-section="true">
+                <h4 className="text-md font-semibold text-gray-900 mb-2">Concise Summary:</h4>
+                {conciseSummaryPoints.length > 0 ? (
+                  <ul className="space-y-3 text-sm text-gray-800">
+                    {conciseSummaryPoints.map((point, index) => (
+                      <li key={`${point}-${index}`} className="flex items-start space-x-2">
+                        <Bot className="h-4 w-4 mt-0.5 text-gray-500" />
+                        <span>{point}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
+                    {dailyAiSummary}
+                  </pre>
+                )}
+              </div>
+              {summaryFeederHighlights.length > 0 && (
+                <div data-pdf-section="true" className="mt-6">
+                  <h4 className="text-md font-semibold text-gray-900 mb-4">Zone & Trip Coverage:</h4>
+                  <div className="space-y-4">
+                    {Object.entries(
+                      summaryFeederHighlights.reduce((acc, detail) => {
+                        const key = `Zone: ${detail.zoneLabel} | Trip ${detail.trips.join(', ')}`
+                        if (!acc[key]) {
+                          acc[key] = []
+                        }
+                        acc[key].push(detail.feeder)
+                        return acc
+                      }, {} as Record<string, string[]>)
+                    ).sort((a, b) => {
+                      const zoneA = parseInt(a[0].match(/Zone: (\d+)/)?.[1] || '0')
+                      const zoneB = parseInt(b[0].match(/Zone: (\d+)/)?.[1] || '0')
+                      return zoneA - zoneB
+                    }).map(([key, feeders]) => (
+                      <div key={key}>
+                        <p className="font-semibold text-gray-900 mb-2">{key}</p>
+                        <ul className="ml-4 space-y-1">
+                          {feeders.map((feeder, idx) => (
+                            <li key={`${key}-${idx}`} className="text-sm text-gray-700">• {feeder}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
               {reportSummary && summaryReportPieData.length > 0 && (
-                <div className="mt-6">
+                <div data-pdf-section="true" className="mt-6">
                   <h4 className="text-md font-semibold text-gray-900 mb-2">Report Breakdown:</h4>
                   <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
                     <StatusPieChart data={summaryReportPieData} />
@@ -1197,11 +1951,12 @@ export default function DailyReportsPage() {
                 </div>
               )}
               {questionBreakdowns.length > 0 && (
-                <div className="mt-6">
+                <div data-pdf-section="true" className="mt-6">
                   <h4 className="text-md font-semibold text-gray-900 mb-2">AI Compliance Snapshot:</h4>
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {questionBreakdowns.map((breakdown) => {
                       const Icon = breakdown.icon
+                      const showBinaryCounts = breakdown.yesCount > 0 || breakdown.noCount > 0
                       return (
                         <div key={`ai-breakdown-${breakdown.id}`} className="rounded-lg border border-gray-100 bg-white/60 p-4">
                           <div className="flex items-center justify-between">
@@ -1214,17 +1969,19 @@ export default function DailyReportsPage() {
                                 <p className="text-xs text-gray-500">{breakdown.totalResponses} responses</p>
                               </div>
                             </div>
-                            <div className="text-right text-xs text-gray-500">
-                              <p className="font-semibold text-emerald-600">
-                                Yes: {breakdown.yesCount}
-                              </p>
-                              <p className="font-semibold text-rose-600">
-                                No: {breakdown.noCount}
-                              </p>
-                            </div>
+                            {showBinaryCounts && (
+                              <div className="text-right text-xs text-gray-500">
+                                <p className="font-semibold text-emerald-600">
+                                  Yes: {breakdown.yesCount}
+                                </p>
+                                <p className="font-semibold text-rose-600">
+                                  No: {breakdown.noCount}
+                                </p>
+                              </div>
+                            )}
                           </div>
                           {breakdown.id === SWACH_QUESTION_ID && (
-                            <div className="mt-3 grid grid-cols-1 gap-3 text-xs text-gray-600 sm:grid-cols-3">
+                            <div className="mt-3 grid grid-cols-1 gap-3 text-xs text-gray-600 sm:grid-cols-2 md:grid-cols-4 ">
                               <label className="flex flex-col space-y-1">
                                 <span className="font-semibold text-gray-700">Feeder Point</span>
                                 <select
@@ -1261,9 +2018,7 @@ export default function DailyReportsPage() {
                                   ))}
                                 </select>
                               </label>
-                              <p className="self-end text-[11px] text-gray-500">
-                                Date filter from the page header already applies to this chart.
-                              </p>
+                             
                             </div>
                           )}
                           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1289,6 +2044,22 @@ export default function DailyReportsPage() {
                               </li>
                             ))}
                           </ul>
+                          {breakdown.id === SWACH_QUESTION_ID && (
+                            <div className="mt-5 flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50/80 p-4 text-xs text-gray-600 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="text-sm font-semibold text-gray-900">Download Swach Excel report</p>
+                                <p>Exports feeder point and trip counts for the filters above.</p>
+                              </div>
+                              <button
+                                onClick={handleDownloadSwachExcel}
+                                disabled={!swachExcelRows.length}
+                                className="btn-secondary inline-flex items-center justify-center space-x-2 px-4 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                <span>Download (.xlsx)</span>
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )
                     })}
@@ -1419,12 +2190,12 @@ export default function DailyReportsPage() {
                             <th className="px-3 py-2 font-semibold text-gray-600">Date</th>
                             <th className="px-3 py-2 font-semibold text-gray-600">Feeder Point</th>
                             <th className="px-3 py-2 font-semibold text-gray-600">Status</th>
-                            <th className="px-3 py-2 font-semibold text-gray-600">Notes</th>
+                            <th className="px-3 py-2 font-semibold text-gray-600">Action</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                           {selectedMemberReports.map(report => (
-                            <tr key={`member-report-${report.id}`} className="bg-white">
+                            <tr key={`member-report-${report.id}`} className="bg-white hover:bg-gray-50">
                               <td className="px-3 py-2 text-gray-700">{formatReportDate(report)}</td>
                               <td className="px-3 py-2 text-gray-900">{report.feederPointName || '—'}</td>
                               <td className="px-3 py-2">
@@ -1433,7 +2204,13 @@ export default function DailyReportsPage() {
                                 </span>
                               </td>
                               <td className="px-3 py-2 text-gray-600">
-                                {report.description ? report.description.slice(0, 80) + (report.description.length > 80 ? '…' : '') : '—'}
+                                <button 
+                                  onClick={() => setSelectedReport(report)}
+                                  className="text-blue-600 hover:text-blue-800 hover:bg-blue-50 p-2 rounded-lg transition-colors"
+                                  title="View Report"
+                                >
+                                  <Eye className="h-5 w-5" />
+                                </button>
                               </td>
                             </tr>
                           ))}
