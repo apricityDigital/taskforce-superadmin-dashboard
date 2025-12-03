@@ -105,6 +105,21 @@ interface QuestionAnswerAggregate {
   color: string;
 }
 
+type BinaryResponseType = 'yes' | 'no'
+
+interface QuestionBinaryDetailEntry {
+  reportId: string;
+  feederPointName: string;
+  submittedBy: string;
+  timestamp: string;
+  remarks?: string;
+}
+
+interface QuestionBinaryDetails {
+  yes: QuestionBinaryDetailEntry[];
+  no: QuestionBinaryDetailEntry[];
+}
+
 interface QuestionBreakdown {
   id: string;
   label: string;
@@ -113,6 +128,7 @@ interface QuestionBreakdown {
   yesCount: number;
   noCount: number;
   answers: QuestionAnswerAggregate[];
+  binaryDetails: QuestionBinaryDetails;
 }
 
 interface MemberQuestionConfig {
@@ -300,6 +316,15 @@ MEMBER_QUESTION_CONFIG.forEach(question => {
     })
 })
 
+const getReportLookupKey = (report: ComplianceReport) => {
+  if (report.id) return report.id
+  const fallbackDate =
+    report.tripDate ||
+    (typeof report.submittedAt === 'string' ? report.submittedAt : '') ||
+    (typeof report.createdAt === 'string' ? report.createdAt : '') ||
+    new Date().toISOString()
+  return `${report.feederPointId || 'feeder'}-${fallbackDate}-${report.tripNumber ?? 'trip'}`
+}
 const getReportMemberKey = (report: ComplianceReport) => report.userId || report.userName || report.id
 const formatReportDate = (report: ComplianceReport) => {
   try {
@@ -486,6 +511,13 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
   if (!reports?.length) return []
 
   const counts = new Map<string, Map<string, QuestionAnswerRecord>>()
+  const binaryDetailsMap = new Map<string, QuestionBinaryDetails>()
+  const getBinaryDetailsBucket = (questionId: string) => {
+    if (!binaryDetailsMap.has(questionId)) {
+      binaryDetailsMap.set(questionId, { yes: [], no: [] })
+    }
+    return binaryDetailsMap.get(questionId)!
+  }
 
   reports.forEach(report => {
     report.answers?.forEach(answer => {
@@ -511,6 +543,33 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
           count: 1,
         })
       }
+
+      if (YES_ANSWER_VALUES.has(normalized) || NO_ANSWER_VALUES.has(normalized)) {
+        const detailBucket = getBinaryDetailsBucket(canonicalId)
+        const remarks =
+          (typeof answer.notes === 'string' && answer.notes.trim()) ||
+          (typeof report.adminNotes === 'string' && report.adminNotes.trim()) ||
+          (typeof report.description === 'string' && report.description.trim()) ||
+          undefined
+        const submittedBy =
+          (report.submittedBy ? String(report.submittedBy).trim() : '') ||
+          (report.userName ? String(report.userName).trim() : '') ||
+          'Unknown Member'
+        const detailEntry: QuestionBinaryDetailEntry = {
+          reportId: getReportLookupKey(report),
+          feederPointName: report.feederPointName?.trim() || 'Unknown Feeder Point',
+          submittedBy,
+          timestamp: formatReportDate(report),
+        }
+        if (remarks) {
+          detailEntry.remarks = remarks
+        }
+        if (YES_ANSWER_VALUES.has(normalized)) {
+          detailBucket.yes.push(detailEntry)
+        } else {
+          detailBucket.no.push(detailEntry)
+        }
+      }
     })
   })
 
@@ -522,12 +581,9 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
     const totalResponses = sortedAnswers.reduce((sum, entry) => sum + entry.count, 0)
     if (!totalResponses) return acc
 
-    const yesCount = sortedAnswers
-      .filter(entry => YES_ANSWER_VALUES.has(entry.normalized))
-      .reduce((sum, entry) => sum + entry.count, 0)
-    const noCount = sortedAnswers
-      .filter(entry => NO_ANSWER_VALUES.has(entry.normalized))
-      .reduce((sum, entry) => sum + entry.count, 0)
+    const binaryDetails = binaryDetailsMap.get(question.id) ?? { yes: [], no: [] }
+    const yesCount = binaryDetails.yes.length
+    const noCount = binaryDetails.no.length
 
     const answers = sortedAnswers.map((entry, index) => ({
       normalized: entry.normalized,
@@ -545,6 +601,7 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
       yesCount,
       noCount,
       answers,
+      binaryDetails,
     })
 
     return acc
@@ -959,6 +1016,14 @@ export default function DailyReportsPage() {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [swachFeederFilter, setSwachFeederFilter] = useState<'all' | string>('all')
   const [swachTripFilter, setSwachTripFilter] = useState<'all' | ComplianceReport['tripNumber']>('all')
+  const [binaryDetailSelection, setBinaryDetailSelection] = useState<{ questionId: string; responseType: BinaryResponseType } | null>(null)
+  const reportMap = useMemo(() => {
+    const map = new Map<string, ComplianceReport>()
+    reports.forEach(report => {
+      map.set(getReportLookupKey(report), report)
+    })
+    return map
+  }, [reports])
   
   const dateRangeLabel = useMemo(() => {
     if (useCustomRange && startDate && endDate) {
@@ -1108,6 +1173,7 @@ export default function DailyReportsPage() {
       yesCount: 0,
       noCount: 0,
       answers: [],
+      binaryDetails: { yes: [], no: [] },
     }
   }, [filteredSwachReports, swachFeederFilter, swachTripFilter])
   const swachExcelRows = useMemo(() => buildSwachExcelRows(filteredSwachReports), [filteredSwachReports])
@@ -1123,6 +1189,25 @@ export default function DailyReportsPage() {
     }
     return patched.filter(breakdown => !HIDDEN_QUESTION_CHART_IDS.has(breakdown.id))
   }, [baseQuestionBreakdowns, swachFilteredBreakdown])
+  const selectedBinaryDetails = useMemo(() => {
+    if (!binaryDetailSelection) return null
+    const breakdown = questionBreakdowns.find(entry => entry.id === binaryDetailSelection.questionId)
+    if (!breakdown) return null
+    const entries = breakdown.binaryDetails[binaryDetailSelection.responseType]
+    if (!entries.length) return null
+    return {
+      ...binaryDetailSelection,
+      questionLabel: breakdown.label,
+      entries,
+    }
+  }, [binaryDetailSelection, questionBreakdowns])
+  useEffect(() => {
+    if (!binaryDetailSelection) return
+    const breakdown = questionBreakdowns.find(entry => entry.id === binaryDetailSelection.questionId)
+    if (!breakdown || !breakdown.binaryDetails[binaryDetailSelection.responseType].length) {
+      setBinaryDetailSelection(null)
+    }
+  }, [binaryDetailSelection, questionBreakdowns])
   const whatsappReportText = useMemo(
     () =>
       buildWhatsappShortReport({
@@ -1175,6 +1260,19 @@ export default function DailyReportsPage() {
   }, [selectedMemberReports])
   const handleMemberRowClick = (memberId: string) => {
     setSelectedMemberId(prev => (prev === memberId ? null : memberId))
+  }
+  const handleBinaryDetailClick = (questionId: string, responseType: BinaryResponseType) => {
+    const breakdown = questionBreakdowns.find(entry => entry.id === questionId)
+    if (!breakdown) return
+    if (!breakdown.binaryDetails[responseType].length) return
+    setBinaryDetailSelection({ questionId, responseType })
+  }
+  const closeBinaryDetailModal = () => setBinaryDetailSelection(null)
+  const handleBinaryDetailEntryClick = (entry: QuestionBinaryDetailEntry) => {
+    const report = reportMap.get(entry.reportId)
+    if (!report) return
+    setSelectedReport(report)
+    setBinaryDetailSelection(null)
   }
 
   const handleDownloadPdf = async () => {
@@ -1956,7 +2054,42 @@ export default function DailyReportsPage() {
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {questionBreakdowns.map((breakdown) => {
                       const Icon = breakdown.icon
-                      const showBinaryCounts = breakdown.yesCount > 0 || breakdown.noCount > 0
+                      const yesFeederCount = breakdown.binaryDetails.yes.length
+                      const noFeederCount = breakdown.binaryDetails.no.length
+                      const showBinaryCounts = yesFeederCount > 0 || noFeederCount > 0
+                      const isBinaryAnswerList = breakdown.answers.every(answer => {
+                        const normalized = answer.normalized.toLowerCase()
+                        return YES_ANSWER_VALUES.has(normalized) || NO_ANSWER_VALUES.has(normalized)
+                      })
+                      const renderBinaryButton = (
+                        responseType: BinaryResponseType,
+                        count: number,
+                        label: string,
+                        colorClass: string
+                      ) => {
+                        const disabled = count === 0
+                        return (
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => handleBinaryDetailClick(breakdown.id, responseType)}
+                            className={`group flex w-full items-center justify-end gap-2 text-right text-xs transition ${
+                              disabled ? 'cursor-not-allowed text-gray-400' : 'text-gray-500 hover:text-primary-600'
+                            }`}
+                          >
+                            <span className={`font-semibold ${colorClass}`}>
+                              {label}: {count} feeder point{count === 1 ? '' : 's'}
+                            </span>
+                            <span
+                              className={`text-[11px] font-medium ${
+                                disabled ? 'text-gray-300' : 'text-primary-600 group-hover:underline'
+                              }`}
+                            >
+                              View List
+                            </span>
+                          </button>
+                        )
+                      }
                       return (
                         <div key={`ai-breakdown-${breakdown.id}`} className="rounded-lg border border-gray-100 bg-white/60 p-4">
                           <div className="flex items-center justify-between">
@@ -1970,13 +2103,9 @@ export default function DailyReportsPage() {
                               </div>
                             </div>
                             {showBinaryCounts && (
-                              <div className="text-right text-xs text-gray-500">
-                                <p className="font-semibold text-emerald-600">
-                                  Yes: {breakdown.yesCount}
-                                </p>
-                                <p className="font-semibold text-rose-600">
-                                  No: {breakdown.noCount}
-                                </p>
+                              <div className="w-full max-w-[240px] text-right">
+                                {renderBinaryButton('yes', yesFeederCount, 'Yes', 'text-emerald-600')}
+                                {renderBinaryButton('no', noFeederCount, 'No', 'text-rose-600')}
                               </div>
                             )}
                           </div>
@@ -2033,17 +2162,6 @@ export default function DailyReportsPage() {
                               yLabel="Responses"
                             />
                           </div>
-                          <ul className="mt-4 space-y-1 text-xs text-gray-600">
-                            {breakdown.answers.map(answer => (
-                              <li key={`${breakdown.id}-ai-${answer.normalized}`} className="flex items-center justify-between">
-                                <span className="flex items-center space-x-2">
-                                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: answer.color }}></span>
-                                  <span>{answer.label}</span>
-                                </span>
-                                <span className="font-semibold text-gray-900">{answer.value}</span>
-                              </li>
-                            ))}
-                          </ul>
                           {breakdown.id === SWACH_QUESTION_ID && (
                             <div className="mt-5 flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50/80 p-4 text-xs text-gray-600 sm:flex-row sm:items-center sm:justify-between">
                               <div>
@@ -2086,6 +2204,47 @@ export default function DailyReportsPage() {
           )}
         </div>
       </div>
+
+      {selectedBinaryDetails && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4 py-8">
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">AI Compliance Snapshot</p>
+                <p className="text-base font-semibold text-gray-900">{selectedBinaryDetails.questionLabel}</p>
+                <p className="text-sm text-gray-600">
+                  {selectedBinaryDetails.responseType === 'yes' ? 'Yes' : 'No'} ·{' '}
+                  {selectedBinaryDetails.entries.length} feeder point{selectedBinaryDetails.entries.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBinaryDetailModal}
+                className="rounded-full p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Close feeder point details"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="max-h-[65vh] overflow-y-auto divide-y divide-gray-100 px-6 py-4 text-sm text-gray-700">
+              {selectedBinaryDetails.entries.map((entry, index) => (
+                <button
+                  key={`${entry.reportId}-${index}`}
+                  type="button"
+                  onClick={() => handleBinaryDetailEntryClick(entry)}
+                  className="w-full py-3 text-left transition hover:bg-gray-50"
+                >
+                  <p className="text-base font-semibold text-gray-900">{entry.feederPointName}</p>
+                  <p className="text-xs text-gray-500">Timestamp: {entry.timestamp}</p>
+                  <p className="mt-1 text-sm text-gray-700">Submitted by: {entry.submittedBy}</p>
+                  {entry.remarks && <p className="mt-1 text-sm text-gray-600">Remarks: {entry.remarks}</p>}
+                  <p className="mt-1 text-[11px] font-semibold uppercase text-primary-600">Open Report →</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {memberQuestionStats.length > 0 && (
         <div className="card">
