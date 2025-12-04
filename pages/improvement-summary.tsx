@@ -6,6 +6,7 @@ import {
   Camera,
   CheckCircle,
   Clock,
+  Download,
   Eye,
   Loader2,
   Percent,
@@ -79,6 +80,334 @@ const resolveReportDate = (report: ComplianceReport): Date | null => {
   )
 }
 
+const REPORTS_START_DATE = new Date('2024-09-15T00:00:00')
+
+const formatDateFolder = (date: Date) => {
+  const copy = new Date(date)
+  copy.setHours(0, 0, 0, 0)
+  return copy.toISOString().slice(0, 10)
+}
+
+const sanitizePathSegment = (value: string, fallback = 'report') => {
+  const trimmed = (value || '').trim()
+  const cleaned = trimmed
+    .replace(/\s+/g, '-')
+    .replace(/[^a-zA-Z0-9-_]/g, '')
+    .slice(0, 80)
+  return cleaned || fallback
+}
+
+const inferFileExtension = (url: string, defaultExt = 'bin') => {
+  try {
+    const pathname = new URL(url).pathname
+    const parts = pathname.split('.')
+    const ext = parts.length > 1 ? parts.pop() : ''
+    if (ext && ext.length <= 5) {
+      return ext.toLowerCase()
+    }
+  } catch {
+    // ignore parsing failures
+  }
+  return defaultExt
+}
+
+type AnswerSummaryForZip = {
+  question: string
+  answer: string
+  notes?: string
+  photos: string[]
+}
+
+type AttachmentSummaryForZip = {
+  filename: string
+  type: string
+  originalName?: string
+  error?: string
+}
+
+const DOWNLOAD_CONCURRENCY = 8
+const ALLOWED_IMAGE_HOSTS = ['firebasestorage.googleapis.com']
+const PDF_PHOTO_LIMIT = 12
+
+const cleanText = (value: string | undefined | null) => {
+  if (!value) return undefined
+  return String(value)
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const buildReportNarrative = (
+  report: ComplianceReport,
+  reportDate: Date | null,
+  answers: AnswerSummaryForZip[],
+  attachments: AttachmentSummaryForZip[],
+  failedAssets: string[]
+) => {
+  const lines: string[] = []
+  const submittedAt = reportDate ? reportDate.toLocaleString() : 'Unknown'
+
+  lines.push(`Report ID: ${report.id}`)
+  lines.push(`Feeder Point: ${report.feederPointName || 'N/A'}`)
+  lines.push(`Submitted By: ${report.userName || report.submittedBy || 'Unknown'}`)
+  lines.push(`Team: ${report.teamName || 'N/A'}`)
+  lines.push(`Trip: ${report.tripNumber ?? 'N/A'} on ${report.tripDate || 'N/A'}`)
+  lines.push(`Submitted At: ${submittedAt}`)
+  lines.push(`Status: ${report.status}`)
+  lines.push(
+    `Location: ${report.submittedLocation?.address || 'N/A'} (${Number.isFinite(report.distanceFromFeederPoint) ? `${report.distanceFromFeederPoint.toFixed(2)}m from feeder point` : 'distance unknown'})`
+  )
+  lines.push(`Priority: ${report.priority || 'N/A'}`)
+  lines.push('')
+  const description = cleanText(report.description) || 'N/A'
+  const adminNotes = cleanText(report.adminNotes)
+  lines.push(`Description: ${description}`)
+  if (adminNotes) {
+    lines.push(`Admin Notes: ${adminNotes}`)
+  }
+  lines.push('')
+  lines.push('Questions & Answers:')
+  if (answers.length === 0) {
+    lines.push('  No answers recorded.')
+  } else {
+    answers.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.question}`)
+      lines.push(`   Answer: ${item.answer || 'N/A'}`)
+      if (item.notes) lines.push(`   Notes: ${item.notes}`)
+      if (item.photos.length) {
+        lines.push(`   Photos saved: ${item.photos.join(', ')}`)
+      }
+    })
+  }
+
+  lines.push('')
+  lines.push('Attachments:')
+  if (attachments.length === 0) {
+    lines.push('  No attachments included.')
+  } else {
+    attachments.forEach(att => {
+      const label = att.originalName ? `${att.filename} (${att.originalName})` : att.filename
+      lines.push(`- ${label} [type: ${att.type}]${att.error ? ` - failed: ${att.error}` : ''}`)
+    })
+  }
+
+  if (failedAssets.length > 0) {
+    lines.push('')
+    lines.push('Download notes:')
+    failedAssets.forEach(note => lines.push(`- ${note}`))
+  }
+
+  lines.push('')
+  lines.push(`Exported from Improvement & Evidence Overview on ${new Date().toLocaleString()}`)
+
+  return lines.join('\n')
+}
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(binary)
+}
+
+const convertBufferToJpegDataUrl = (buffer: ArrayBuffer): Promise<string> => {
+  // Only used when direct embed fails (e.g., webp). Canvas conversion is slower, so we avoid it unless necessary.
+  return new Promise((resolve, reject) => {
+    try {
+      const blob = new Blob([buffer], { type: 'image/*' })
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      const objectUrl = URL.createObjectURL(blob)
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = img.width
+          canvas.height = img.height
+          const ctx = canvas.getContext('2d')
+          if (!ctx) throw new Error('canvas context missing')
+          ctx.drawImage(img, 0, 0)
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+          URL.revokeObjectURL(objectUrl)
+          resolve(dataUrl)
+        } catch (err) {
+          URL.revokeObjectURL(objectUrl)
+          reject(err)
+        }
+      }
+      img.onerror = err => {
+        URL.revokeObjectURL(objectUrl)
+        reject(err)
+      }
+      img.src = objectUrl
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+const loadImageAsDataUrl = (url: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    try {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = img.width
+          canvas.height = img.height
+          const ctx = canvas.getContext('2d')
+          if (!ctx) throw new Error('canvas context missing')
+          ctx.drawImage(img, 0, 0)
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
+          resolve(dataUrl)
+        } catch (err) {
+          reject(err)
+        }
+      }
+      img.onerror = err => reject(err)
+      img.src = url
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+const dataUrlToArrayBuffer = (dataUrl: string): ArrayBuffer => {
+  const base64 = dataUrl.split(',')[1] || ''
+  const binary = atob(base64)
+  const len = binary.length
+  const bytes = new Uint8Array(len)
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes.buffer
+}
+
+const buildReportPdf = async (
+  jsPDF: typeof import('jspdf').jsPDF,
+  narrative: string,
+  title: string,
+  photos: { url: string; label: string }[],
+  downloadAsset: (
+    url: string
+  ) => Promise<{ ok: boolean; error: string | null; buffer: ArrayBuffer | null; dataUrl?: string }>,
+  failedAssets: string[]
+) => {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' })
+  const margin = 40
+  const maxWidth = doc.internal.pageSize.getWidth() - margin * 2
+  const lineHeight = 16
+  const pageHeight = doc.internal.pageSize.getHeight()
+
+  doc.setFontSize(13)
+  const titleLines = doc.splitTextToSize(title, maxWidth)
+  let y = margin
+  titleLines.forEach(line => {
+    doc.text(line, margin, y)
+    y += lineHeight
+  })
+
+  doc.setFontSize(11)
+  y += 6
+  const lines = doc.splitTextToSize(narrative, maxWidth)
+  lines.forEach(line => {
+    if (y > doc.internal.pageSize.getHeight() - margin) {
+      doc.addPage()
+      y = margin
+    }
+    doc.text(line, margin, y)
+    y += lineHeight
+  })
+
+  let photosPlaced = 0
+  let photoPage = false
+  if (photos.length > 0) {
+    const limitedPhotos = photos.slice(0, PDF_PHOTO_LIMIT) // limit to speed up export
+    for (const photo of limitedPhotos) {
+      const result = await downloadAsset(photo.url)
+      if (!result.ok || !result.buffer) {
+        failedAssets.push(`Photo ${photo.label} could not be downloaded: ${result.error || 'unknown error'}`)
+        continue
+      }
+
+      let dataUrl: string | null = null
+      if (result.dataUrl) {
+        dataUrl = result.dataUrl
+      } else {
+        try {
+          // Always convert to JPEG for reliable embedding across browsers
+          dataUrl = await convertBufferToJpegDataUrl(result.buffer)
+        } catch (imgError) {
+          try {
+            dataUrl = `data:image/jpeg;base64,${arrayBufferToBase64(result.buffer)}`
+          } catch (fallbackErr) {
+            failedAssets.push(
+              `Photo ${photo.label} could not be embedded: ${(fallbackErr as Error).message || 'embed error'}`
+            )
+            continue
+          }
+        }
+      }
+
+      const imgWidth = maxWidth
+      const imgHeight = Math.min(260, pageHeight - margin * 2 - 20)
+      if (!photoPage) {
+        doc.addPage()
+        doc.setFontSize(12)
+        doc.text('Photos', margin, margin)
+        y = margin + 20
+        photoPage = true
+      } else if (y + imgHeight > pageHeight - margin) {
+        doc.addPage()
+        y = margin
+      }
+      doc.setFontSize(11)
+      doc.text(photo.label, margin, y)
+      y += 12
+      try {
+        doc.addImage(dataUrl, 'JPEG', margin, y, imgWidth, imgHeight, undefined, 'FAST')
+        photosPlaced += 1
+      } catch (addErr) {
+        failedAssets.push(
+          `Photo ${photo.label} could not be embedded: ${(addErr as Error).message || 'embed error'}`
+        )
+      }
+      y += imgHeight + 18
+    }
+    if (photoPage && photosPlaced === 0) {
+      doc.setFontSize(11)
+      doc.text('No photos could be embedded. See download notes below.', margin, y)
+    }
+  }
+
+  if (failedAssets.length > 0) {
+    if (!photoPage || y > pageHeight - margin - 60) {
+      doc.addPage()
+      y = margin
+    }
+    doc.setFontSize(12)
+    doc.text('Download notes:', margin, y)
+    y += 14
+    doc.setFontSize(11)
+    failedAssets.forEach(note => {
+      if (y > pageHeight - margin) {
+        doc.addPage()
+        y = margin
+      }
+      const split = doc.splitTextToSize(`- ${note}`, maxWidth)
+      split.forEach(line => {
+        doc.text(line, margin, y)
+        y += lineHeight
+      })
+    })
+  }
+
+  return { buffer: doc.output('arraybuffer'), photosPlaced }
+}
+
 export default function ImprovementSummaryPage() {
   const [reports, setReports] = useState<ComplianceReport[]>([])
   const [loading, setLoading] = useState(true)
@@ -106,6 +435,8 @@ export default function ImprovementSummaryPage() {
   } | null>(null)
   const [deletingFeederKey, setDeletingFeederKey] = useState<string | null>(null)
   const [improvementModal, setImprovementModal] = useState<{ name: string; percent: number; notes: string[] } | null>(null)
+  const [downloadingZip, setDownloadingZip] = useState(false)
+  const [zipStatus, setZipStatus] = useState<string | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -450,6 +781,253 @@ export default function ImprovementSummaryPage() {
     }
   }
 
+  const handleDownloadEvidenceZip = async () => {
+    if (dateError) {
+      alert('Please fix the date range before downloading.')
+      return
+    }
+
+    const effectiveStart = (() => {
+      const base = startDate ? new Date(startDate) : new Date()
+      const lowerBound = REPORTS_START_DATE.getTime()
+      return new Date(Math.max(base.getTime(), lowerBound))
+    })()
+    const effectiveEnd = endDate ? new Date(endDate) : new Date()
+    effectiveStart.setHours(0, 0, 0, 0)
+    effectiveEnd.setHours(23, 59, 59, 999)
+
+    const dateLabel = `${formatDateFolder(effectiveStart)} to ${formatDateFolder(effectiveEnd)}`
+
+    const confirmation = window.confirm(
+      `This export can be very large (tens of GB). Make sure you have space.\n\nContinue downloading reports for ${dateLabel}?`
+    )
+    if (!confirmation) return
+
+    const defaultRootName = `improvement-evidence-${formatDateFolder(effectiveStart)}-to-${formatDateFolder(effectiveEnd)}`
+    const folderNameInput = window.prompt(
+      'Enter a folder name to use inside the ZIP (the file still saves to your browser download location).',
+      defaultRootName
+    )
+    if (folderNameInput === null) return
+    const rootFolderName = sanitizePathSegment(folderNameInput) || defaultRootName
+
+    setDownloadingZip(true)
+    setZipStatus('Collecting reports...')
+
+    const datedReports = filteredReports
+      .map(report => ({ report, reportDate: resolveReportDate(report) }))
+      .filter(item => item.reportDate && item.reportDate >= effectiveStart && item.reportDate <= effectiveEnd)
+
+    if (datedReports.length === 0) {
+      alert(`No reports found between ${formatDateFolder(effectiveStart)} and ${formatDateFolder(effectiveEnd)}.`)
+      setDownloadingZip(false)
+      setZipStatus(null)
+      return
+    }
+
+    setZipStatus(`Preparing ${datedReports.length} reports...`)
+
+    try {
+      const { default: JSZip } = await import('jszip')
+      const { jsPDF } = await import('jspdf')
+      const zip = new JSZip()
+      const rootFolder = zip.folder(rootFolderName)!
+      const downloadCache = new Map<string, ArrayBuffer>()
+      const sortedReports = datedReports.sort(
+        (a, b) => (a.reportDate?.getTime() || 0) - (b.reportDate?.getTime() || 0)
+      )
+
+      const buildProxiedUrl = (rawUrl: string) => {
+        try {
+          const parsed = new URL(rawUrl)
+          const isAllowed = ALLOWED_IMAGE_HOSTS.some(host => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`))
+          if (isAllowed) {
+            const normalized = rawUrl.trim().replace(/\s+/g, '%20')
+            return `/api/image-proxy?url=${encodeURIComponent(normalized)}`
+          }
+        } catch {
+          // ignore parse error
+        }
+        return null
+      }
+
+      const downloadAsset = async (url: string) => {
+        if (!url) return { ok: false, error: 'missing url' as const, buffer: null as ArrayBuffer | null, dataUrl: undefined }
+        if (downloadCache.has(url)) {
+          return { ok: true, error: null as const, buffer: downloadCache.get(url)!, dataUrl: undefined }
+        }
+
+        const candidates = [buildProxiedUrl(url), url].filter((u): u is string => Boolean(u))
+
+        for (const target of candidates) {
+          try {
+            const response = await fetch(target, { cache: 'no-store', referrerPolicy: 'no-referrer' })
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`)
+            }
+            const buffer = await response.arrayBuffer()
+            downloadCache.set(url, buffer)
+            return { ok: true, error: null as const, buffer, dataUrl: undefined }
+          } catch (error) {
+            console.warn('Download attempt failed, trying fallback if any:', target, error)
+          }
+        }
+
+        try {
+          const dataUrl = await loadImageAsDataUrl(url)
+          const buffer = dataUrlToArrayBuffer(dataUrl)
+          downloadCache.set(url, buffer)
+          return { ok: true, error: null as const, buffer, dataUrl }
+        } catch (imgErr) {
+          console.error('Failed to download asset via image fallback:', url, imgErr)
+          return { ok: false, error: (imgErr as Error).message || 'failed to fetch', buffer: null, dataUrl: undefined }
+        }
+      }
+
+      const tasks: Array<() => Promise<void>> = []
+
+      let processed = 0
+      for (const { report, reportDate } of sortedReports) {
+        if (!reportDate) continue
+        processed += 1
+        setZipStatus(`Adding report ${processed} of ${sortedReports.length} (${formatDateFolder(reportDate)})`)
+
+        const dateKey = formatDateFolder(reportDate)
+        const dayFolder = rootFolder.folder(dateKey)!
+        const feederSlug = sanitizePathSegment(report.feederPointName || 'feeder-point')
+        const userSlug = sanitizePathSegment(report.userName || 'user')
+        const reportFolder = dayFolder.folder(
+          `${feederSlug}_trip-${report.tripNumber ?? 'n'}_${userSlug}_${sanitizePathSegment(report.id || 'id')}`
+        )!
+        const photoFolder = reportFolder.folder('photos')!
+        const attachmentFolder = reportFolder.folder('attachments')!
+
+        const answerSummaries: AnswerSummaryForZip[] = []
+        const attachmentSummaries: AttachmentSummaryForZip[] = []
+        const failedAssets: string[] = []
+        const pdfPhotos: { url: string; label: string }[] = []
+
+        if (report.answers && report.answers.length > 0) {
+          for (let answerIndex = 0; answerIndex < report.answers.length; answerIndex++) {
+            const answer = report.answers[answerIndex]
+            const summary: AnswerSummaryForZip = {
+              question: answer.description || answer.questionId || `Question ${answerIndex + 1}`,
+              answer: cleanText(answer.answer?.toString()) || 'N/A',
+              notes: cleanText(answer.notes),
+              photos: []
+            }
+
+            if (answer.photos && answer.photos.length > 0) {
+              for (let photoIndex = 0; photoIndex < answer.photos.length; photoIndex++) {
+                const url = answer.photos[photoIndex]
+                const ext = inferFileExtension(url, 'jpg')
+                const filename = `answer-${answerIndex + 1}-photo-${photoIndex + 1}.${ext}`
+                pdfPhotos.push({
+                  url,
+                  label: `Answer ${answerIndex + 1} photo ${photoIndex + 1}`
+                })
+                tasks.push(async () => {
+                  const result = await downloadAsset(url)
+                  if (result.ok && result.buffer) {
+                    photoFolder.file(filename, result.buffer)
+                    summary.photos.push(`photos/${filename}`)
+                  } else if (result.error) {
+                    failedAssets.push(`Answer photo (${summary.question}) could not download: ${result.error}`)
+                  }
+                })
+              }
+            }
+
+            answerSummaries.push(summary)
+          }
+        }
+
+        if (report.attachments && report.attachments.length > 0) {
+          for (let attIndex = 0; attIndex < report.attachments.length; attIndex++) {
+            const att = report.attachments[attIndex]
+            const base = sanitizePathSegment(att.filename?.replace(/\.[^/.]+$/, '') || `${att.type}-${attIndex + 1}`)
+            const extFromName = att.filename?.split('.').pop()
+            const ext = extFromName && extFromName.length <= 5
+              ? extFromName
+              : inferFileExtension(att.url, att.type === 'photo' ? 'jpg' : 'bin')
+            const filename = `${base}.${ext}`
+            const targetFolder = att.type === 'photo' ? photoFolder : attachmentFolder
+            if (att.type === 'photo') {
+              pdfPhotos.push({
+                url: att.url,
+                label: att.filename || filename
+              })
+            }
+            tasks.push(async () => {
+              const result = await downloadAsset(att.url)
+              const savedName = `${att.type === 'photo' ? 'photos' : 'attachments'}/${filename}`
+              attachmentSummaries.push({
+                filename: savedName,
+                type: att.type,
+                originalName: att.filename,
+                error: result.error || undefined
+              })
+
+              if (result.ok && result.buffer) {
+                targetFolder.file(filename, result.buffer)
+              } else if (result.error) {
+                failedAssets.push(`Attachment ${att.filename || filename} failed: ${result.error}`)
+              }
+            })
+          }
+        }
+
+        reportFolder.file('report.json', JSON.stringify(report, null, 2))
+        try {
+          const pdfTitle = `${report.feederPointName || 'Feeder Point'} | Trip ${report.tripNumber ?? 'N/A'} (${formatDateFolder(reportDate)})`
+          const narrative = buildReportNarrative(report, reportDate, answerSummaries, attachmentSummaries, failedAssets)
+          const pdfResult = await buildReportPdf(jsPDF, narrative, pdfTitle, pdfPhotos, downloadAsset, failedAssets)
+          reportFolder.file('report.pdf', pdfResult.buffer)
+        } catch (pdfError) {
+          console.error('Failed to generate PDF report:', pdfError)
+          failedAssets.push('Could not render PDF version of the report.')
+        }
+        const narrativeWithNotes = buildReportNarrative(report, reportDate, answerSummaries, attachmentSummaries, failedAssets)
+        reportFolder.file('report.txt', narrativeWithNotes)
+      }
+
+      if (tasks.length > 0) {
+        setZipStatus(`Downloading ${tasks.length} files...`)
+        let index = 0
+        const worker = async () => {
+          while (true) {
+            const currentIndex = index
+            index += 1
+            const task = tasks[currentIndex]
+            if (!task) break
+            await task()
+            if (currentIndex % 25 === 0) {
+              setZipStatus(`Downloading files... (${Math.min(currentIndex + 1, tasks.length)} of ${tasks.length})`)
+            }
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, tasks.length) }, worker))
+      }
+
+      setZipStatus('Compressing ZIP...')
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(zipBlob)
+      link.download = `${rootFolderName}_${dateLabel}.zip`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(link.href)
+      setZipStatus('Download ready')
+    } catch (error) {
+      console.error('Failed to build ZIP export:', error)
+      alert('Could not download the historical reports right now. Please try again.')
+    } finally {
+      setTimeout(() => setZipStatus(null), 2000)
+      setDownloadingZip(false)
+    }
+  }
+
   return (
     <>
       <Head>
@@ -465,7 +1043,22 @@ export default function ImprovementSummaryPage() {
               Date-filtered rollup of submissions, photo evidence, answered questions, and AI-styled improvement insights.
             </p>
           </div>
-
+          <div className="flex flex-col gap-2 sm:items-end">
+            <button
+              onClick={handleDownloadEvidenceZip}
+              disabled={downloadingZip || reports.length === 0}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm transition hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Download className="h-4 w-4" />
+              <span>{downloadingZip ? 'Preparing ZIP...' : 'Download day-wise ZIP'}</span>
+            </button>
+            <p className="text-xs text-gray-600 max-w-xs text-right">
+              Exports reports for the selected date range (not before {formatDateFolder(REPORTS_START_DATE)}) into date folders with questions, answers, and photos. Ensure you have enough disk space before starting.
+            </p>
+            {zipStatus && (
+              <p className="text-xs text-indigo-700 font-semibold text-right">{zipStatus}</p>
+            )}
+          </div>
         </div>
 
         <div className="rounded-2xl border border-slate-100 bg-white shadow-lg p-5">

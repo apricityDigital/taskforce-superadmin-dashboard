@@ -944,6 +944,7 @@ export default function DailyReportsPage() {
   const [selectedReport, setSelectedReport] = useState<ComplianceReport | null>(null)
   const [adminNotes, setAdminNotes] = useState('')
   const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [downloadingReport, setDownloadingReport] = useState(false)
   const [reportSummary, setReportSummary] = useState<ReportSummary | null>(null)
   const [dailyAiDetailedAnalysis, setDailyAiDetailedAnalysis] = useState<string | null>(null)
   const [dailyAiSummary, setDailyAiSummary] = useState<string | null>(null)
@@ -1569,6 +1570,169 @@ export default function DailyReportsPage() {
       alert('Failed to update report status')
     } finally {
       setUpdatingStatus(false)
+    }
+  }
+
+  const fetchImageAsDataUrl = async (url: string) => {
+    if (!url) return null
+    try {
+      const normalizedUrl = url.trim().replace(/\s+/g, '%20')
+      const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(normalizedUrl)}`
+      const response = await fetch(proxiedUrl)
+      if (!response.ok) {
+        throw new Error(`Image fetch failed with status ${response.status}`)
+      }
+      const blob = await response.blob()
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+        reader.onerror = () => reject(new Error('Failed to convert image'))
+        reader.readAsDataURL(blob)
+      })
+    } catch (error) {
+      console.error('Failed to fetch image for report download:', url, error)
+      return null
+    }
+  }
+
+  const handleDownloadSelectedReport = async () => {
+    if (!selectedReport) return
+
+    setDownloadingReport(true)
+    try {
+      const pdf = new jsPDF('p', 'mm', 'a4')
+      pdf.setFontSize(11)
+      const margin = 12
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const maxWidth = pageWidth - margin * 2
+      let cursorY = margin
+
+      const ensureSpace = (height: number) => {
+        if (cursorY + height > pageHeight - margin) {
+          pdf.addPage()
+          cursorY = margin
+        }
+      }
+
+      const addLine = (text: string, options?: { bold?: boolean }) => {
+        const lines = pdf.splitTextToSize(text, maxWidth)
+        const lineHeight = 6
+        lines.forEach((line, index) => {
+          ensureSpace(lineHeight)
+          pdf.setFont('helvetica', options?.bold ? 'bold' : 'normal')
+          pdf.text(line, margin, cursorY)
+          cursorY += lineHeight
+          if (index === lines.length - 1) {
+            pdf.setFont('helvetica', 'normal')
+          }
+        })
+      }
+
+      const addSectionTitle = (text: string) => {
+        ensureSpace(10)
+        pdf.setFontSize(14)
+        pdf.setFont('helvetica', 'bold')
+        pdf.text(text, margin, cursorY)
+        cursorY += 8
+        pdf.setFontSize(11)
+        pdf.setFont('helvetica', 'normal')
+      }
+
+      const addDivider = () => {
+        ensureSpace(6)
+        pdf.setDrawColor(220)
+        pdf.line(margin, cursorY, pageWidth - margin, cursorY)
+        cursorY += 6
+      }
+
+      const addImageBlock = async (dataUrl: string, label: string) => {
+        const imgType = dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG'
+        const { width = maxWidth, height = maxWidth * 0.75 } = pdf.getImageProperties(dataUrl)
+        const renderWidth = Math.min(maxWidth, width)
+        const renderHeight = (height * renderWidth) / width
+
+        ensureSpace(renderHeight + 12)
+        pdf.setFont('helvetica', 'bold')
+        pdf.text(label, margin, cursorY)
+        pdf.setFont('helvetica', 'normal')
+        cursorY += 6
+        pdf.addImage(dataUrl, imgType as any, margin, cursorY, renderWidth, renderHeight)
+        cursorY += renderHeight + 6
+      }
+
+      const feederSafe = sanitizeFilenameSegment(selectedReport.feederPointName || 'FeederPoint', 'FeederPoint')
+      const tripSafe = sanitizeFilenameSegment(String(selectedReport.tripNumber || 'Trip'), 'Trip')
+      const dateSafe = sanitizeFilenameSegment(selectedReport.tripDate || selectedDate, 'Date')
+
+      addSectionTitle('Report Details')
+      const distanceLabel =
+        typeof selectedReport.distanceFromFeederPoint === 'number'
+          ? `${selectedReport.distanceFromFeederPoint.toFixed(2)}m from feeder point`
+          : 'Distance not available'
+
+      addLine(`Feeder Point: ${selectedReport.feederPointName || 'N/A'}`)
+      addLine(`Trip: ${selectedReport.tripNumber} on ${selectedReport.tripDate}`)
+      addLine(`Submitted By: ${selectedReport.userName} (${selectedReport.teamName})`)
+      addLine(`Submitted At: ${formatReportDate(selectedReport)}`)
+      addLine(`Status: ${selectedReport.status}`)
+      addLine(`Priority: ${selectedReport.priority || 'N/A'}`)
+      addLine(`Location: ${selectedReport.submittedLocation?.address || 'N/A'} (${distanceLabel})`)
+      if (selectedReport.description) {
+        addLine(`Description: ${selectedReport.description}`)
+      }
+
+      addDivider()
+      addSectionTitle('Answers')
+      for (const [index, answer] of selectedReport.answers.entries()) {
+        addLine(`Q${index + 1}: ${answer.questionId}`, { bold: true })
+        addLine(`Answer: ${answer.answer}`)
+        if (answer.notes) {
+          addLine(`Notes: ${answer.notes}`)
+        }
+        if (answer.photos?.length) {
+          for (const [photoIndex, photoUrl] of answer.photos.entries()) {
+            const dataUrl = await fetchImageAsDataUrl(photoUrl)
+            if (dataUrl) {
+              await addImageBlock(dataUrl, `Answer Photo ${photoIndex + 1}`)
+            } else {
+              addLine(`Answer Photo ${photoIndex + 1}: unable to load image`)
+            }
+          }
+        }
+        addDivider()
+      }
+
+      if (selectedReport.attachments?.length) {
+        addSectionTitle('Attachments')
+
+        const photoAttachments = selectedReport.attachments.filter(att => att.type === 'photo')
+        for (const [photoIndex, attachment] of photoAttachments.entries()) {
+          const dataUrl = await fetchImageAsDataUrl(attachment.url)
+          if (dataUrl) {
+            await addImageBlock(dataUrl, `${attachment.filename || 'Photo'} (${photoIndex + 1})`)
+          } else {
+            addLine(`${attachment.filename || 'Photo'}: unable to load image`)
+          }
+        }
+
+        const otherAttachments = selectedReport.attachments.filter(att => att.type !== 'photo')
+        if (otherAttachments.length) {
+          addDivider()
+          addSectionTitle('Other Attachments')
+          otherAttachments.forEach(att => {
+            addLine(`${att.type.toUpperCase()}: ${att.filename}`)
+            addLine(`Link: ${att.url}`)
+          })
+        }
+      }
+
+      pdf.save(`Daily_Report_${feederSafe}_Trip_${tripSafe}_${dateSafe}.pdf`)
+    } catch (error) {
+      console.error('Failed to download report:', error)
+      alert('Could not download the report. Please try again.')
+    } finally {
+      setDownloadingReport(false)
     }
   }
 
@@ -2475,6 +2639,14 @@ export default function DailyReportsPage() {
                     >
                       <AlertTriangle className="h-4 w-4" />
                       <span>{updatingStatus ? 'Updating...' : 'Action Required'}</span>
+                    </button>
+                    <button
+                      onClick={handleDownloadSelectedReport}
+                      disabled={downloadingReport}
+                      className="col-span-2 w-full btn-secondary flex items-center justify-center space-x-2"
+                    >
+                      <Download className="h-4 w-4" />
+                      <span>{downloadingReport ? 'Preparing report...' : 'Download Report (with photos)'}</span>
                     </button>
                   </div>
                 </div>
