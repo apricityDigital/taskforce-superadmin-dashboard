@@ -85,7 +85,10 @@ const REPORTS_START_DATE = new Date('2024-09-15T00:00:00')
 const formatDateFolder = (date: Date) => {
   const copy = new Date(date)
   copy.setHours(0, 0, 0, 0)
-  return copy.toISOString().slice(0, 10)
+  const year = copy.getFullYear()
+  const month = `${copy.getMonth() + 1}`.padStart(2, '0')
+  const day = `${copy.getDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 const sanitizePathSegment = (value: string, fallback = 'report') => {
