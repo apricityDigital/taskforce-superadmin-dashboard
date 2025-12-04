@@ -1386,10 +1386,8 @@ function getAnswerFromReport(report: ComplianceReport | undefined, keys: readonl
     const answerDescription = (answer.description || '').toLowerCase()
 
     if (normalizedKeys.includes(answerId) || (answerDescription && normalizedKeys.includes(answerDescription))) {
-      if (typeof answer.answer === 'number') {
-        return answer.answer.toString()
-      }
-      return answer.answer || null
+      const value = answer.answer
+      return value ? value.toString() : null
     }
   }
 
@@ -1461,13 +1459,8 @@ function getAnswerDisplayValue(answer: ComplianceAnswer) {
   if (answer.answer === null || answer.answer === undefined || answer.answer === '') {
     return 'Not Provided'
   }
-  if (typeof answer.answer === 'number') {
-    return answer.answer.toString()
-  }
-  if (typeof answer.answer === 'string') {
-    return answer.answer.trim() || 'Not Provided'
-  }
-  return String(answer.answer)
+  const value = answer.answer.toString()
+  return value.trim() || 'Not Provided'
 }
 
 function humanizeQuestionKey(value: string) {

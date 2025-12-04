@@ -1618,7 +1618,7 @@ export default function DailyReportsPage() {
       const addLine = (text: string, options?: { bold?: boolean }) => {
         const lines = pdf.splitTextToSize(text, maxWidth)
         const lineHeight = 6
-        lines.forEach((line, index) => {
+        lines.forEach((line: string, index: number) => {
           ensureSpace(lineHeight)
           pdf.setFont('helvetica', options?.bold ? 'bold' : 'normal')
           pdf.text(line, margin, cursorY)
@@ -1684,14 +1684,16 @@ export default function DailyReportsPage() {
 
       addDivider()
       addSectionTitle('Answers')
-      for (const [index, answer] of selectedReport.answers.entries()) {
+      for (let index = 0; index < selectedReport.answers.length; index += 1) {
+        const answer = selectedReport.answers[index]
         addLine(`Q${index + 1}: ${answer.questionId}`, { bold: true })
         addLine(`Answer: ${answer.answer}`)
         if (answer.notes) {
           addLine(`Notes: ${answer.notes}`)
         }
         if (answer.photos?.length) {
-          for (const [photoIndex, photoUrl] of answer.photos.entries()) {
+          for (let photoIndex = 0; photoIndex < answer.photos.length; photoIndex += 1) {
+            const photoUrl = answer.photos[photoIndex]
             const dataUrl = await fetchImageAsDataUrl(photoUrl)
             if (dataUrl) {
               await addImageBlock(dataUrl, `Answer Photo ${photoIndex + 1}`)
@@ -1707,7 +1709,8 @@ export default function DailyReportsPage() {
         addSectionTitle('Attachments')
 
         const photoAttachments = selectedReport.attachments.filter(att => att.type === 'photo')
-        for (const [photoIndex, attachment] of photoAttachments.entries()) {
+        for (let photoIndex = 0; photoIndex < photoAttachments.length; photoIndex += 1) {
+          const attachment = photoAttachments[photoIndex]
           const dataUrl = await fetchImageAsDataUrl(attachment.url)
           if (dataUrl) {
             await addImageBlock(dataUrl, `${attachment.filename || 'Photo'} (${photoIndex + 1})`)

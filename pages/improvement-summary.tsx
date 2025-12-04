@@ -208,7 +208,12 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
   const bytes = new Uint8Array(buffer)
   const chunk = 0x8000
   for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+    const slice = bytes.subarray(i, i + chunk)
+    let segment = ''
+    for (let j = 0; j < slice.length; j += 1) {
+      segment += String.fromCharCode(slice[j])
+    }
+    binary += segment
   }
   return btoa(binary)
 }
@@ -305,7 +310,7 @@ const buildReportPdf = async (
   doc.setFontSize(13)
   const titleLines = doc.splitTextToSize(title, maxWidth)
   let y = margin
-  titleLines.forEach(line => {
+  titleLines.forEach((line: string) => {
     doc.text(line, margin, y)
     y += lineHeight
   })
@@ -313,7 +318,7 @@ const buildReportPdf = async (
   doc.setFontSize(11)
   y += 6
   const lines = doc.splitTextToSize(narrative, maxWidth)
-  lines.forEach(line => {
+  lines.forEach((line: string) => {
     if (y > doc.internal.pageSize.getHeight() - margin) {
       doc.addPage()
       y = margin
@@ -398,7 +403,7 @@ const buildReportPdf = async (
         y = margin
       }
       const split = doc.splitTextToSize(`- ${note}`, maxWidth)
-      split.forEach(line => {
+      split.forEach((line: string) => {
         doc.text(line, margin, y)
         y += lineHeight
       })
@@ -851,10 +856,14 @@ export default function ImprovementSummaryPage() {
         return null
       }
 
-      const downloadAsset = async (url: string) => {
-        if (!url) return { ok: false, error: 'missing url' as const, buffer: null as ArrayBuffer | null, dataUrl: undefined }
+      type DownloadAssetResult =
+        | { ok: true; error: null; buffer: ArrayBuffer; dataUrl?: string }
+        | { ok: false; error: string; buffer: null; dataUrl?: string }
+
+      const downloadAsset = async (url: string): Promise<DownloadAssetResult> => {
+        if (!url) return { ok: false, error: 'missing url', buffer: null, dataUrl: undefined }
         if (downloadCache.has(url)) {
-          return { ok: true, error: null as const, buffer: downloadCache.get(url)!, dataUrl: undefined }
+          return { ok: true, error: null, buffer: downloadCache.get(url)!, dataUrl: undefined }
         }
 
         const candidates = [buildProxiedUrl(url), url].filter((u): u is string => Boolean(u))
@@ -867,7 +876,7 @@ export default function ImprovementSummaryPage() {
             }
             const buffer = await response.arrayBuffer()
             downloadCache.set(url, buffer)
-            return { ok: true, error: null as const, buffer, dataUrl: undefined }
+            return { ok: true, error: null, buffer, dataUrl: undefined }
           } catch (error) {
             console.warn('Download attempt failed, trying fallback if any:', target, error)
           }
@@ -877,7 +886,7 @@ export default function ImprovementSummaryPage() {
           const dataUrl = await loadImageAsDataUrl(url)
           const buffer = dataUrlToArrayBuffer(dataUrl)
           downloadCache.set(url, buffer)
-          return { ok: true, error: null as const, buffer, dataUrl }
+          return { ok: true, error: null, buffer, dataUrl }
         } catch (imgErr) {
           console.error('Failed to download asset via image fallback:', url, imgErr)
           return { ok: false, error: (imgErr as Error).message || 'failed to fetch', buffer: null, dataUrl: undefined }
