@@ -128,9 +128,9 @@ type AttachmentSummaryForZip = {
   error?: string
 }
 
-const DOWNLOAD_CONCURRENCY = 8
 const ALLOWED_IMAGE_HOSTS = ['firebasestorage.googleapis.com']
 const PDF_PHOTO_LIMIT = 12
+const ZIP_PART_THRESHOLD_BYTES = 1024 * 1024 * 1024 // keep each generated blob under ~800MB to avoid browser limits
 
 const cleanText = (value: string | undefined | null) => {
   if (!value) return undefined
@@ -838,12 +838,58 @@ export default function ImprovementSummaryPage() {
     try {
       const { default: JSZip } = await import('jszip')
       const { jsPDF } = await import('jspdf')
-      const zip = new JSZip()
-      const rootFolder = zip.folder(rootFolderName)!
+      const encoder = new TextEncoder()
+      const makeZip = () => {
+        const instance = new JSZip()
+        return { zip: instance, root: instance.folder(rootFolderName)! }
+      }
+      let partNumber = 1
+      let currentSize = 0
+      let { zip, root } = makeZip()
       const downloadCache = new Map<string, ArrayBuffer>()
       const sortedReports = datedReports.sort(
         (a, b) => (a.reportDate?.getTime() || 0) - (b.reportDate?.getTime() || 0)
       )
+      const zipOptions = {
+        type: 'blob' as const,
+        compression: 'DEFLATE' as const,
+        compressionOptions: { level: 3 },
+        streamFiles: true
+      }
+
+      const triggerDownload = (blob: Blob, name: string) => {
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(blob)
+        link.download = name
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(link.href)
+      }
+
+      const flushZip = async () => {
+        if (currentSize === 0) return
+        const zipName =
+          partNumber === 1 ? `${rootFolderName}_${dateLabel}.zip` : `${rootFolderName}_${dateLabel}_part-${partNumber}.zip`
+        setZipStatus(`Compressing ${zipName}...`)
+        const zipBlob = await zip.generateAsync(zipOptions)
+        triggerDownload(zipBlob, zipName)
+        partNumber += 1
+        currentSize = 0
+        const next = makeZip()
+        zip = next.zip
+        root = next.root
+      }
+
+      const recordSize = (bytes: number) => {
+        currentSize += bytes
+      }
+
+      const ensureCapacity = async () => {
+        if (currentSize >= ZIP_PART_THRESHOLD_BYTES) {
+          await flushZip()
+        }
+      }
 
       const buildProxiedUrl = (rawUrl: string) => {
         try {
@@ -896,8 +942,6 @@ export default function ImprovementSummaryPage() {
         }
       }
 
-      const tasks: Array<() => Promise<void>> = []
-
       let processed = 0
       for (const { report, reportDate } of sortedReports) {
         if (!reportDate) continue
@@ -905,7 +949,8 @@ export default function ImprovementSummaryPage() {
         setZipStatus(`Adding report ${processed} of ${sortedReports.length} (${formatDateFolder(reportDate)})`)
 
         const dateKey = formatDateFolder(reportDate)
-        const dayFolder = rootFolder.folder(dateKey)!
+        await ensureCapacity()
+        const dayFolder = root.folder(dateKey)!
         const feederSlug = sanitizePathSegment(report.feederPointName || 'feeder-point')
         const userSlug = sanitizePathSegment(report.userName || 'user')
         const reportFolder = dayFolder.folder(
@@ -934,19 +979,18 @@ export default function ImprovementSummaryPage() {
                 const url = answer.photos[photoIndex]
                 const ext = inferFileExtension(url, 'jpg')
                 const filename = `answer-${answerIndex + 1}-photo-${photoIndex + 1}.${ext}`
-                pdfPhotos.push({
-                  url,
-                  label: `Answer ${answerIndex + 1} photo ${photoIndex + 1}`
-                })
-                tasks.push(async () => {
-                  const result = await downloadAsset(url)
-                  if (result.ok && result.buffer) {
-                    photoFolder.file(filename, result.buffer)
-                    summary.photos.push(`photos/${filename}`)
-                  } else if (result.error) {
-                    failedAssets.push(`Answer photo (${summary.question}) could not download: ${result.error}`)
-                  }
-                })
+              pdfPhotos.push({
+                url,
+                label: `Answer ${answerIndex + 1} photo ${photoIndex + 1}`
+              })
+                const result = await downloadAsset(url)
+                if (result.ok && result.buffer) {
+                  photoFolder.file(filename, result.buffer)
+                  recordSize(result.buffer.byteLength)
+                  summary.photos.push(`photos/${filename}`)
+                } else if (result.error) {
+                  failedAssets.push(`Answer photo (${summary.question}) could not download: ${result.error}`)
+                }
               }
             }
 
@@ -970,66 +1014,47 @@ export default function ImprovementSummaryPage() {
                 label: att.filename || filename
               })
             }
-            tasks.push(async () => {
-              const result = await downloadAsset(att.url)
-              const savedName = `${att.type === 'photo' ? 'photos' : 'attachments'}/${filename}`
-              attachmentSummaries.push({
-                filename: savedName,
-                type: att.type,
-                originalName: att.filename,
-                error: result.error || undefined
-              })
-
-              if (result.ok && result.buffer) {
-                targetFolder.file(filename, result.buffer)
-              } else if (result.error) {
-                failedAssets.push(`Attachment ${att.filename || filename} failed: ${result.error}`)
-              }
+            const result = await downloadAsset(att.url)
+            const savedName = `${att.type === 'photo' ? 'photos' : 'attachments'}/${filename}`
+            attachmentSummaries.push({
+              filename: savedName,
+              type: att.type,
+              originalName: att.filename,
+              error: result.error || undefined
             })
+
+            if (result.ok && result.buffer) {
+              targetFolder.file(filename, result.buffer)
+              recordSize(result.buffer.byteLength)
+            } else if (result.error) {
+              failedAssets.push(`Attachment ${att.filename || filename} failed: ${result.error}`)
+            }
           }
         }
 
-        reportFolder.file('report.json', JSON.stringify(report, null, 2))
+        const reportJson = JSON.stringify(report, null, 2)
+        reportFolder.file('report.json', reportJson)
+        recordSize(encoder.encode(reportJson).length)
         try {
           const pdfTitle = `${report.feederPointName || 'Feeder Point'} | Trip ${report.tripNumber ?? 'N/A'} (${formatDateFolder(reportDate)})`
           const narrative = buildReportNarrative(report, reportDate, answerSummaries, attachmentSummaries, failedAssets)
           const pdfResult = await buildReportPdf(jsPDF, narrative, pdfTitle, pdfPhotos, downloadAsset, failedAssets)
           reportFolder.file('report.pdf', pdfResult.buffer)
+          recordSize(pdfResult.buffer.byteLength)
         } catch (pdfError) {
           console.error('Failed to generate PDF report:', pdfError)
           failedAssets.push('Could not render PDF version of the report.')
         }
         const narrativeWithNotes = buildReportNarrative(report, reportDate, answerSummaries, attachmentSummaries, failedAssets)
         reportFolder.file('report.txt', narrativeWithNotes)
-      }
+        recordSize(encoder.encode(narrativeWithNotes).length)
 
-      if (tasks.length > 0) {
-        setZipStatus(`Downloading ${tasks.length} files...`)
-        let index = 0
-        const worker = async () => {
-          while (true) {
-            const currentIndex = index
-            index += 1
-            const task = tasks[currentIndex]
-            if (!task) break
-            await task()
-            if (currentIndex % 25 === 0) {
-              setZipStatus(`Downloading files... (${Math.min(currentIndex + 1, tasks.length)} of ${tasks.length})`)
-            }
-          }
+        if (currentSize >= ZIP_PART_THRESHOLD_BYTES) {
+          await flushZip()
         }
-        await Promise.all(Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, tasks.length) }, worker))
       }
 
-      setZipStatus('Compressing ZIP...')
-      const zipBlob = await zip.generateAsync({ type: 'blob' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(zipBlob)
-      link.download = `${rootFolderName}_${dateLabel}.zip`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(link.href)
+      await flushZip()
       setZipStatus('Download ready')
     } catch (error) {
       console.error('Failed to build ZIP export:', error)
@@ -1065,7 +1090,7 @@ export default function ImprovementSummaryPage() {
               <span>{downloadingZip ? 'Preparing ZIP...' : 'Download day-wise ZIP'}</span>
             </button>
             <p className="text-xs text-gray-600 max-w-xs text-right">
-              Exports reports for the selected date range (not before {formatDateFolder(REPORTS_START_DATE)}) into date folders with questions, answers, and photos. Ensure you have enough disk space before starting.
+              Exports reports for the selected date range (not before {formatDateFolder(REPORTS_START_DATE)}) into date folders with questions, answers, and photos. Large downloads auto-split into multiple ZIP parts (~800MB each) to avoid browser limits.
             </p>
             {zipStatus && (
               <p className="text-xs text-indigo-700 font-semibold text-right">{zipStatus}</p>
