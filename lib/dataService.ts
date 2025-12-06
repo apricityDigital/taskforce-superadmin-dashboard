@@ -1,4 +1,4 @@
-import { collection, getDocs, getDoc, doc, updateDoc, deleteDoc, query, orderBy, limit, where, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, updateDoc, deleteDoc, query, orderBy, limit, where, setDoc, onSnapshot, serverTimestamp, deleteField } from 'firebase/firestore';
 import { db } from './firebase';
 
 export interface DashboardStats {
@@ -67,12 +67,14 @@ export interface ComplianceReport {
   title?: string;
   submittedBy?: string;
   attachments?: ComplianceReportAttachment[];
+  rejectionAnalysis?: RejectionAnalysisResult;
 }
 
 export interface ComplianceAnswer {
   description: string;
   questionId: string;
   answer: 'yes' | 'no' | string;
+  description?: string;
   photos?: string[]; // Array of photo URLs
   notes?: string;
 }
@@ -83,6 +85,14 @@ export interface ComplianceReportAttachment {
   url: string;
   filename: string;
   uploadedDate: string;
+}
+
+export interface RejectionAnalysisResult {
+  reason: string;
+  validationSummary: string;
+  reviewedPhotos: string[];
+  aiModel: string;
+  generatedAt: string;
 }
 
 export interface AccessRequest {
@@ -587,32 +597,68 @@ export class DataService {
     return results.sort((a, b) => b.totalReports - a.totalReports);
   }
 
-  static async getFeederPointReports(feederPointId?: string, feederPointName?: string): Promise<ComplianceReport[]> {
-    if (!feederPointId && !feederPointName) {
+  static async getFeederPointReports(
+    feederPointId?: string,
+    options?: string | { fallbackName?: string; startDate?: Date; endDate?: Date }
+  ): Promise<ComplianceReport[]> {
+    const normalizedOptions =
+      typeof options === 'string'
+        ? { fallbackName: options }
+        : options;
+
+    const queries = [];
+
+    if (feederPointId) {
+      queries.push(
+        getDocs(query(collection(db, 'complianceReports'), where('feederPointId', '==', feederPointId)))
+      );
+    }
+
+    if (normalizedOptions?.fallbackName) {
+      queries.push(
+        getDocs(
+          query(collection(db, 'complianceReports'), where('feederPointName', '==', normalizedOptions.fallbackName))
+        )
+      );
+    }
+
+    if (queries.length === 0) {
       return [];
     }
 
-    const queries = [];
-    if (feederPointId) {
-      queries.push(query(collection(db, 'complianceReports'), where('feederPointId', '==', feederPointId)));
-    }
-    if (feederPointName) {
-      queries.push(query(collection(db, 'complianceReports'), where('feederPointName', '==', feederPointName)));
-    }
+    const startDate = normalizedOptions?.startDate ? new Date(normalizedOptions.startDate) : null;
+    const endDate = normalizedOptions?.endDate ? new Date(normalizedOptions.endDate) : null;
 
     const reportsMap = new Map<string, ComplianceReport>();
-    for (const qRef of queries) {
-      const snapshot = await getDocs(qRef);
-      snapshot.docs.forEach(docSnapshot => {
-        const reportId = docSnapshot.id;
-        if (!reportsMap.has(reportId)) {
-          reportsMap.set(reportId, { id: reportId, ...docSnapshot.data() } as ComplianceReport);
-        }
-      });
-    }
 
-    const combined = Array.from(reportsMap.values());
-    return combined.sort((a, b) => {
+    const snapshots = await Promise.all(queries);
+    snapshots.forEach(snapshot => {
+      snapshot.docs.forEach(docSnapshot => {
+        const data = docSnapshot.data() as ComplianceReport;
+        const report = { ...data, id: docSnapshot.id } as ComplianceReport;
+
+        const reportDate =
+          DataService.coerceDate(report.submittedAt) ||
+          DataService.coerceDate(report.updatedAt) ||
+          DataService.coerceDate(report.createdAt) ||
+          DataService.coerceDate(report.tripDate);
+
+        if (startDate && reportDate && reportDate < startDate) {
+          return;
+        }
+        if (endDate && reportDate && reportDate > endDate) {
+          return;
+        }
+        if (!reportDate && (startDate || endDate)) {
+          return;
+        }
+
+        reportsMap.set(report.id, report);
+      });
+    });
+
+    const reports = Array.from(reportsMap.values());
+    reports.sort((a, b) => {
       const aDate =
         DataService.coerceDate(a.submittedAt) ||
         DataService.coerceDate(a.updatedAt) ||
@@ -625,6 +671,7 @@ export class DataService {
       const bTime = bDate ? bDate.getTime() : 0;
       return bTime - aTime;
     });
+    return reports;
   }
 
   // Get all users
@@ -743,7 +790,8 @@ export class DataService {
     reportId: string,
     status: ComplianceReport['status'],
     adminNotes?: string,
-    reviewedBy?: string
+    reviewedBy?: string,
+    rejectionAnalysis?: RejectionAnalysisResult
   ): Promise<void> {
     try {
       const updateData: any = {
@@ -757,6 +805,17 @@ export class DataService {
       }
       if (reviewedBy) {
         updateData.reviewedBy = reviewedBy;
+      }
+      if (status === 'rejected') {
+        updateData.rejectionAnalysis = rejectionAnalysis ?? {
+          reason: 'Automatic AI analysis could not be generated.',
+          validationSummary: 'Gemini validation unavailable. Please add manual notes.',
+          reviewedPhotos: [],
+          aiModel: 'unavailable',
+          generatedAt: new Date().toISOString()
+        };
+      } else {
+        updateData.rejectionAnalysis = deleteField();
       }
 
       await updateDoc(doc(db, 'complianceReports', reportId), updateData);

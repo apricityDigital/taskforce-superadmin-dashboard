@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import { 
   MapPin, 
   Search, 
@@ -22,8 +22,8 @@ import {
 import { DataService, FeederPoint, Team, User, ComplianceReport, ComplianceAnswer } from '@/lib/dataService'
 import { AIService } from '@/lib/aiService'
 
-const YES_ANSWER_VALUES = new Set(['yes', 'y', 'true', 'clean', 'present', 'available', 'segregated', '1', '�o"�,?', '�o.'])
-const NO_ANSWER_VALUES = new Set(['no', 'n', 'false', 'dirty', 'absent', 'not present', 'not available', 'not clean', 'not segregated', '0', '�?O', '�o-�,?'])
+const YES_ANSWER_VALUES = new Set(['yes', 'y', 'true', 'clean', 'present', 'available', 'segregated', '1', '∩┐╜o"∩┐╜,?', '∩┐╜o.'])
+const NO_ANSWER_VALUES = new Set(['no', 'n', 'false', 'dirty', 'absent', 'not present', 'not available', 'not clean', 'not segregated', '0', '∩┐╜?O', '∩┐╜o-∩┐╜,?'])
 const REPORT_QUESTION_KEYS = {
   zone: ['q1', 'q1_zone_name', 'zone_name', 'zone'],
   ward: ['q2', 'q2_ward_number', 'ward_number'],
@@ -1217,7 +1217,7 @@ function FeederPointReportModal({
                       <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Trip</p>
                       <p className="mt-1">
                         {selectedHistoryReport.tripNumber ? `Trip ${selectedHistoryReport.tripNumber}` : 'Not Specified'}
-                        {selectedHistoryReport.tripDate ? ` • ${selectedHistoryReport.tripDate}` : ''}
+                        {selectedHistoryReport.tripDate ? ` ΓÇó ${selectedHistoryReport.tripDate}` : ''}
                       </p>
                     </div>
                     <div>
@@ -1288,7 +1288,7 @@ function FeederPointReportModal({
                           disabled={analysisLoading}
                           className="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {analysisLoading ? 'Analyzing…' : 'Analyze with AI'}
+                          {analysisLoading ? 'AnalyzingΓÇª' : 'Analyze with AI'}
                         </button>
                       </div>
                       <div className="mt-2 divide-y divide-gray-100 rounded-lg border border-gray-100 bg-white">

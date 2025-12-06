@@ -8,50 +8,7 @@ interface SimpleBarChartProps {
   yLabel?: string
 }
 
-const wrapTickLabel = (value: string, maxLineLength = 14) => {
-  if (!value) return ['']
-
-  const words = value.split(' ')
-  const lines: string[] = []
-  let currentLine = ''
-
-  words.forEach(word => {
-    const tentative = currentLine ? `${currentLine} ${word}` : word
-    if (tentative.length > maxLineLength && currentLine) {
-      lines.push(currentLine)
-      currentLine = word
-    } else {
-      currentLine = tentative
-    }
-  })
-
-  if (currentLine) {
-    lines.push(currentLine)
-  }
-
-  if (lines.length === 1 && lines[0].length > maxLineLength && !lines[0].includes(' ')) {
-    const singleWord = lines[0]
-    lines.length = 0
-    for (let i = 0; i < singleWord.length; i += maxLineLength) {
-      lines.push(singleWord.slice(i, i + maxLineLength))
-    }
-  }
-
-  return lines
-}
-
-const AxisTick = ({ x = 0, y = 0, payload }: { x?: number; y?: number; payload?: { value: string } }) => {
-  const lines = wrapTickLabel(payload?.value ?? '')
-  return (
-    <text x={x} y={y + 10} fill="#374151" textAnchor="middle" fontSize={10}>
-      {lines.map((line, index) => (
-        <tspan key={`${line}-${index}`} x={x} dy={index === 0 ? 0 : 12}>
-          {line}
-        </tspan>
-      ))}
-    </text>
-  )
-}
+const AxisTick = () => null
 
 export function SimpleBarChart({ data, xLabel = 'Categories', yLabel = 'Value' }: SimpleBarChartProps) {
   return (
@@ -65,7 +22,7 @@ export function SimpleBarChart({ data, xLabel = 'Categories', yLabel = 'Value' }
             tickLine={false}
             axisLine={false}
             tick={<AxisTick />}
-            height={70}
+            height={60}
             label={{ value: xLabel, position: 'insideBottom', offset: -5, fontSize: 10 }}
           />
           <YAxis
