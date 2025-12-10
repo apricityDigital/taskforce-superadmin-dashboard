@@ -1,7 +1,7 @@
 // AI Service for GPT Integration
 // This service handles AI analysis of daily reports
 
-import { ComplianceReport } from './dataService';
+import { ComplianceReport, RejectionAnalysisResult } from './dataService';
 
 export interface DailyReportData {
   date: string;
@@ -162,6 +162,35 @@ DISTRIBUTION: Secretary (Internal Security), Joint Secretary (Operations)
 
 END OF REPORT
     `;
+  }
+
+  static async analyzeRejectedReport(report: ComplianceReport, adminNotes?: string): Promise<RejectionAnalysisResult> {
+    try {
+      const response = await fetch('/api/analyze-rejection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ report, adminNotes })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API call failed with status: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Error analyzing rejected report:', error);
+      return {
+        reason: 'Gemini analysis unavailable. Please review the report manually.',
+        validationSummary: adminNotes
+          ? `Manual admin notes: ${adminNotes}`
+          : 'Automatic validation failed. Add notes explaining rejection rationale.',
+        reviewedPhotos: AIService.collectReportPhotoUrls(report),
+        aiModel: 'fallback-simulation',
+        generatedAt: new Date().toISOString()
+      };
+    }
   }
 
   /**
@@ -531,5 +560,21 @@ Today's operations processed ${totalReports} compliance reports, with a ${resolu
     }
 
     return recommendations.join('\n');
+  }
+  private static collectReportPhotoUrls(report: ComplianceReport): string[] {
+    const urls = new Set<string>();
+    report.attachments?.forEach(attachment => {
+      if (attachment.url) {
+        urls.add(attachment.url);
+      }
+    });
+    report.answers?.forEach(answer => {
+      answer.photos?.forEach(photo => {
+        if (photo) {
+          urls.add(photo);
+        }
+      });
+    });
+    return Array.from(urls);
   }
 }
