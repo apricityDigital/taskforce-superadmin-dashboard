@@ -38,7 +38,17 @@ const navigation = [
 export default function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const router = useRouter()
-  const { logout } = useAuth()
+  const { user, logout } = useAuth()
+
+  const navigationForRole = navigation.filter(item => {
+    if (
+      user?.role === 'pmc_member' &&
+      ['/employee-tracker', '/users', '/complaints', '/settings'].includes(item.href)
+    ) {
+      return false
+    }
+    return true
+  })
 
   const handleLogout = async () => {
     await logout()
@@ -59,13 +69,13 @@ export default function Layout({ children }: LayoutProps) {
               <X className="h-6 w-6 text-white" />
             </button>
           </div>
-          <SidebarContent currentPath={router.pathname} />
+          <SidebarContent currentPath={router.pathname} navigationItems={navigationForRole} />
         </div>
       </div>
 
       {/* Desktop sidebar */}
       <div className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0">
-        <SidebarContent currentPath={router.pathname} />
+        <SidebarContent currentPath={router.pathname} navigationItems={navigationForRole} />
       </div>
 
       {/* Main content */}
@@ -115,7 +125,7 @@ export default function Layout({ children }: LayoutProps) {
   )
 }
 
-function SidebarContent({ currentPath }: { currentPath: string }) {
+function SidebarContent({ currentPath, navigationItems }: { currentPath: string; navigationItems: typeof navigation }) {
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-white border-r border-gray-200">
       <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto">
@@ -127,7 +137,7 @@ function SidebarContent({ currentPath }: { currentPath: string }) {
         </div>
         
         <nav className="mt-8 flex-1 px-2 space-y-1">
-          {navigation.map((item) => {
+          {navigationItems.map((item) => {
             const isActive = currentPath === item.href
             return (
               <Link

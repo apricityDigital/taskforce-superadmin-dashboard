@@ -16,7 +16,6 @@ import {
   Zap,
   Settings,
   User as UserIcon,
-  Plus,
   X
 } from 'lucide-react'
 import { DataService, FeederPoint, Team, User, ComplianceReport, ComplianceAnswer } from '@/lib/dataService'
@@ -83,9 +82,6 @@ export default function FeederPointsPage() {
   const [reportError, setReportError] = useState<string | null>(null)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingFeederPoint, setEditingFeederPoint] = useState<any | null>(null)
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
-  const [creatingData, setCreatingData] = useState(false)
 
   useEffect(() => {
     const unsubscribeFeederPoints = DataService.onFeederPointsChange(feederPointsData => {
@@ -236,18 +232,6 @@ export default function FeederPointsPage() {
     }
   }
 
-  const handleCreateFeederPoint = async (feederPointData: any) => {
-    try {
-      await DataService.createFeederPoint(feederPointData)
-      await loadFeederPoints()
-      setShowCreateModal(false)
-      alert('Feeder point created successfully!')
-    } catch (error) {
-      console.error('Error creating feeder point:', error)
-      alert('Error creating feeder point. Please try again.')
-    }
-  }
-
   const handleDeleteFeederPoint = async (feederPoint: any) => {
     if (!confirm(`Are you sure you want to delete feeder point "${feederPoint.name}"?`)) {
       return
@@ -260,20 +244,6 @@ export default function FeederPointsPage() {
     } catch (error) {
       console.error('Error deleting feeder point:', error)
       alert('Error deleting feeder point. Please try again.')
-    }
-  }
-
-  const createSampleData = async () => {
-    setCreatingData(true)
-    try {
-      await DataService.createSampleFeederPoints()
-      alert('Sample feeder points created successfully!')
-      await loadFeederPoints() // Reload data
-    } catch (error) {
-      console.error('Error creating sample data:', error)
-      alert('Error creating sample data. Check console for details.')
-    } finally {
-      setCreatingData(false)
     }
   }
 
@@ -337,31 +307,7 @@ export default function FeederPointsPage() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="btn-primary flex items-center space-x-2"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Create Feeder Point</span>
-            </button>
-            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm ${
-              connectionStatus === 'connected' ? 'bg-green-100 text-green-800' :
-              connectionStatus === 'error' ? 'bg-red-100 text-red-800' :
-              'bg-yellow-100 text-yellow-800'
-            }`}>
-              <div className={`w-2 h-2 rounded-full ${
-                connectionStatus === 'connected' ? 'bg-green-500' :
-                connectionStatus === 'error' ? 'bg-red-500' :
-                'bg-yellow-500'
-              }`} />
-              <span>
-                {connectionStatus === 'connected' ? 'Connected' :
-                 connectionStatus === 'error' ? 'Connection Error' :
-                 'Connecting...'}
-              </span>
-            </div>
-          </div>
+          {/* Actions intentionally removed for restricted roles */}
         </div>
       </div>
 
@@ -684,23 +630,7 @@ export default function FeederPointsPage() {
                   ? 'Try adjusting your search or filters.'
                   : 'All feeder points are currently filtered out.'}
               </p>
-              {feederPoints.length === 0 && (
-                <div className="mt-4 space-y-4">
-                  <div className="p-4 bg-blue-50 rounded-lg">
-                    <p className="text-sm text-blue-800">
-                      <strong>Debug Info:</strong> Connected to database but no feeder points found.
-                      Check the browser console for more details.
-                    </p>
-                  </div>
-                  <button
-                    onClick={createSampleData}
-                    disabled={creatingData}
-                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-                  >
-                    {creatingData ? 'Creating Sample Data...' : 'Create Sample Feeder Points'}
-                  </button>
-                </div>
-              )}
+              {/* Creation options removed */}
             </div>
           )}
         </div>
@@ -714,15 +644,6 @@ export default function FeederPointsPage() {
           loading={reportLoading}
           error={reportError}
           onClose={handleCloseDetails}
-        />
-      )}
-
-      {/* Create Feeder Point Modal */}
-      {showCreateModal && (
-        <FeederPointFormModal
-          title="Create Feeder Point"
-          onClose={() => setShowCreateModal(false)}
-          onSave={handleCreateFeederPoint}
         />
       )}
 

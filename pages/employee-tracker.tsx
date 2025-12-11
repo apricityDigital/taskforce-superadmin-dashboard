@@ -23,6 +23,7 @@ import { StatusPieChart } from '@/components/charts/StatusPieChart'
 import { SimpleBarChart } from '@/components/charts/SimpleBarChart'
 import { SummaryTrendChart } from '@/components/charts/SummaryTrendChart'
 import type { KeyboardEvent, RefObject } from 'react'
+import { useAuth } from '@/contexts/AuthContext'
 
 const formatPercent = (value: number) => `${Math.round((value || 0) * 100)}%`
 const toDateInputValue = (date: Date) => {
@@ -90,6 +91,8 @@ export default function EmployeeTrackerPage() {
   const feederReportsSectionRef = useRef<HTMLDivElement | null>(null)
 
   const router = useRouter()
+  const { user } = useAuth()
+  const isPmcMember = user?.role === 'pmc_member'
 
   const { startDate, endDate, dateError } = useMemo(() => {
     if (!startDateInput || !endDateInput) {
@@ -115,6 +118,14 @@ export default function EmployeeTrackerPage() {
 
   useEffect(() => {
     const load = async () => {
+      if (isPmcMember) {
+        setPerformance([])
+        setFeederSummaries([])
+        setLoading(false)
+        setFeederLoading(false)
+        return
+      }
+
       if (dateError) {
         setPerformance([])
         setLoading(false)
@@ -157,7 +168,7 @@ export default function EmployeeTrackerPage() {
     }
 
     load()
-  }, [startDate, endDate, dateError])
+  }, [startDate, endDate, dateError, isPmcMember])
 
   const filteredPerformance = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -493,6 +504,17 @@ export default function EmployeeTrackerPage() {
     if (ref.current) {
       ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
+  }
+
+  if (isPmcMember) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="bg-white shadow rounded-lg p-6 text-center max-w-md">
+          <h1 className="text-xl font-semibold text-gray-900">Access Restricted</h1>
+          <p className="mt-2 text-gray-600">Employee tracking is available to administrators only.</p>
+        </div>
+      </div>
+    )
   }
 
   if (loading) {

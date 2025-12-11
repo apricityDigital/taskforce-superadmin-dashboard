@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Search, Filter, Download, Eye, Edit, Trash2, X, MapPin, Calendar, FileText, TrendingUp, AlertTriangle, CheckCircle, Users, Shield, Activity } from 'lucide-react'
 import { DataService, User } from '@/lib/dataService'
+import { useAuth } from '@/contexts/AuthContext'
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
@@ -25,15 +26,24 @@ export default function UsersPage() {
   const [passwordActionStatus, setPasswordActionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [passwordFetchLoading, setPasswordFetchLoading] = useState(false)
   const [passwordUpdateLoading, setPasswordUpdateLoading] = useState(false)
+  const { user } = useAuth()
+  const isPmcMember = user?.role === 'pmc_member'
 
   useEffect(() => {
+    if (isPmcMember) {
+      setUsers([])
+      setFilteredUsers([])
+      setLoading(false)
+      return
+    }
+
     const unsubscribe = DataService.onUsersChange(usersData => {
       setUsers(usersData)
       setLoading(false)
     })
 
     return () => unsubscribe()
-  }, [])
+  }, [isPmcMember])
 
   useEffect(() => {
     filterUsers()
@@ -250,7 +260,8 @@ export default function UsersPage() {
     const roleColors = {
       admin: 'badge-danger',
       task_force_team: 'badge-info',
-      commissioner: 'badge-warning'
+      commissioner: 'badge-warning',
+      pmc_member: 'badge-primary'
     }
     return roleColors[role as keyof typeof roleColors] || 'badge-info'
   }
@@ -368,6 +379,17 @@ export default function UsersPage() {
       console.error('Error deleting user:', error)
       alert('Error deleting user. Please try again.')
     }
+  }
+
+  if (isPmcMember) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="bg-white shadow rounded-lg p-6 text-center max-w-md">
+          <h1 className="text-xl font-semibold text-gray-900">Access Restricted</h1>
+          <p className="mt-2 text-gray-600">User management is limited to administrator accounts.</p>
+        </div>
+      </div>
+    )
   }
 
   if (loading) {
@@ -530,6 +552,7 @@ export default function UsersPage() {
                 <option value="admin">👑 Admin</option>
                 <option value="task_force_team">⚡ Task Force Team</option>
                 <option value="commissioner">🏛️ Commissioner</option>
+                <option value="pmc_member">PMC Member</option>
               </select>
               {roleFilter !== 'all' && (
                 <div className="absolute right-8 top-1/2 transform -translate-y-1/2">
@@ -1210,6 +1233,7 @@ export default function UsersPage() {
                         <option value="admin">Admin</option>
                         <option value="task_force_team">Task Force Team</option>
                         <option value="commissioner">Commissioner</option>
+                        <option value="pmc_member">PMC Member</option>
                       </select>
                     </div>
 

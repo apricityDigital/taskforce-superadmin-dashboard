@@ -105,6 +105,17 @@ interface QuestionAnswerAggregate {
   color: string;
 }
 
+interface QuestionAnswerDetail {
+  feederPointId?: string;
+  feederPointName: string;
+  submittedBy: string;
+  submittedAt: Date | null;
+  remarks?: string;
+  normalizedAnswer: string;
+  answerLabel: string;
+  reportId: string;
+}
+
 interface QuestionBreakdown {
   id: string;
   label: string;
@@ -112,6 +123,10 @@ interface QuestionBreakdown {
   totalResponses: number;
   yesCount: number;
   noCount: number;
+  yesFeederCount: number;
+  noFeederCount: number;
+  yesDetails: QuestionAnswerDetail[];
+  noDetails: QuestionAnswerDetail[];
   answers: QuestionAnswerAggregate[];
 }
 
@@ -316,6 +331,29 @@ const formatReportDate = (report: ComplianceReport) => {
   return '—'
 }
 
+const normalizeReportDateValue = (value: unknown): Date | null => {
+  if (!value) return null
+  if (value instanceof Date) return value
+  if (typeof (value as { toDate?: () => Date }).toDate === 'function') {
+    return (value as { toDate: () => Date }).toDate()
+  }
+  if (typeof value === 'string') {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+  return null
+}
+
+const resolveReportDate = (report: ComplianceReport): Date | null => {
+  return (
+    normalizeReportDateValue(report.submittedAt) ||
+    normalizeReportDateValue(report.updatedAt) ||
+    normalizeReportDateValue(report.createdAt) ||
+    normalizeReportDateValue(report.tripDate) ||
+    null
+  )
+}
+
 const buildMemberQuestionStats = (reports: ComplianceReport[]): MemberQuestionRow[] => {
   if (!reports?.length) return []
 
@@ -486,8 +524,14 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
   if (!reports?.length) return []
 
   const counts = new Map<string, Map<string, QuestionAnswerRecord>>()
+  const latestFeederAnswers = new Map<string, Map<string, QuestionAnswerDetail>>()
 
   reports.forEach(report => {
+    const reportDate = resolveReportDate(report)
+    const feederPointName = report.feederPointName?.trim() || 'Unknown Feeder Point'
+    const feederKey = report.feederPointId || feederPointName || report.id
+    const submittedBy = report.userName || report.submittedBy || 'Unknown'
+
     report.answers?.forEach(answer => {
       if (!answer.questionId) return
       const questionSlug = slugifyQuestionId(answer.questionId)
@@ -511,16 +555,41 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
           count: 1,
         })
       }
+
+      if (!latestFeederAnswers.has(canonicalId)) {
+        latestFeederAnswers.set(canonicalId, new Map())
+      }
+      const feederMap = latestFeederAnswers.get(canonicalId)!
+      const remarkSource = [answer.notes, report.description, report.adminNotes].find(
+        value => typeof value === 'string' && value.toString().trim().length > 0
+      ) as string | undefined
+      const detail: QuestionAnswerDetail = {
+        feederPointId: report.feederPointId,
+        feederPointName,
+        submittedBy,
+        submittedAt: reportDate,
+        remarks: remarkSource?.toString().trim(),
+        normalizedAnswer: normalized,
+        answerLabel: label,
+        reportId: report.id,
+      }
+      const existing = feederMap.get(feederKey)
+      const detailTime = detail.submittedAt?.getTime() ?? -Infinity
+      const existingTime = existing?.submittedAt?.getTime() ?? -Infinity
+      if (!existing || detailTime >= existingTime) {
+        feederMap.set(feederKey, detail)
+      }
     })
   })
 
   return MEMBER_QUESTION_CONFIG.reduce<QuestionBreakdown[]>((acc, question) => {
     const answerMap = counts.get(question.id)
-    if (!answerMap) return acc
+    const feederMap = latestFeederAnswers.get(question.id)
+    if (!answerMap && !feederMap) return acc
 
-    const sortedAnswers = Array.from(answerMap.values()).sort((a, b) => b.count - a.count)
+    const sortedAnswers = Array.from(answerMap?.values() ?? []).sort((a, b) => b.count - a.count)
     const totalResponses = sortedAnswers.reduce((sum, entry) => sum + entry.count, 0)
-    if (!totalResponses) return acc
+    if (!totalResponses && !feederMap?.size) return acc
 
     const yesCount = sortedAnswers
       .filter(entry => YES_ANSWER_VALUES.has(entry.normalized))
@@ -537,6 +606,27 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
       color: getAnswerColor(entry.normalized, index),
     }))
 
+    const yesDetails: QuestionAnswerDetail[] = []
+    const noDetails: QuestionAnswerDetail[] = []
+    if (feederMap) {
+      feederMap.forEach(detail => {
+        if (YES_ANSWER_VALUES.has(detail.normalizedAnswer)) {
+          yesDetails.push(detail)
+        } else if (NO_ANSWER_VALUES.has(detail.normalizedAnswer)) {
+          noDetails.push(detail)
+        }
+      })
+      const sortDetails = (list: QuestionAnswerDetail[]) =>
+        list.sort((a, b) => {
+          const aTime = a.submittedAt?.getTime() ?? 0
+          const bTime = b.submittedAt?.getTime() ?? 0
+          if (bTime !== aTime) return bTime - aTime
+          return a.feederPointName.localeCompare(b.feederPointName)
+        })
+      sortDetails(yesDetails)
+      sortDetails(noDetails)
+    }
+
     acc.push({
       id: question.id,
       label: question.label,
@@ -544,6 +634,10 @@ const buildQuestionBreakdowns = (reports: ComplianceReport[]): QuestionBreakdown
       totalResponses,
       yesCount,
       noCount,
+      yesFeederCount: yesDetails.length,
+      noFeederCount: noDetails.length,
+      yesDetails,
+      noDetails,
       answers,
     })
 
@@ -930,6 +1024,7 @@ const buildWhatsappShortReport = ({
 
 export default function DailyReportsPage() {
   const { user } = useAuth()
+  const isPmcMember = user?.role === 'pmc_member'
   const [reports, setReports] = useState<ComplianceReport[]>([])
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
   const [useCustomRange, setUseCustomRange] = useState(false)
@@ -959,6 +1054,12 @@ export default function DailyReportsPage() {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [swachFeederFilter, setSwachFeederFilter] = useState<'all' | string>('all')
   const [swachTripFilter, setSwachTripFilter] = useState<'all' | ComplianceReport['tripNumber']>('all')
+  const [answerDetailModal, setAnswerDetailModal] = useState<{
+    questionId: string
+    questionLabel: string
+    answerType: 'yes' | 'no'
+    entries: QuestionAnswerDetail[]
+  } | null>(null)
   
   const dateRangeLabel = useMemo(() => {
     if (useCustomRange && startDate && endDate) {
@@ -1107,6 +1208,10 @@ export default function DailyReportsPage() {
       totalResponses: 0,
       yesCount: 0,
       noCount: 0,
+      yesFeederCount: 0,
+      noFeederCount: 0,
+      yesDetails: [],
+      noDetails: [],
       answers: [],
     }
   }, [filteredSwachReports, swachFeederFilter, swachTripFilter])
@@ -1123,6 +1228,15 @@ export default function DailyReportsPage() {
     }
     return patched.filter(breakdown => !HIDDEN_QUESTION_CHART_IDS.has(breakdown.id))
   }, [baseQuestionBreakdowns, swachFilteredBreakdown])
+  const handleOpenAnswerDetail = (breakdown: QuestionBreakdown, answerType: 'yes' | 'no') => {
+    const entries = answerType === 'yes' ? breakdown.yesDetails : breakdown.noDetails
+    setAnswerDetailModal({
+      questionId: breakdown.id,
+      questionLabel: breakdown.label,
+      answerType,
+      entries,
+    })
+  }
   const whatsappReportText = useMemo(
     () =>
       buildWhatsappShortReport({
@@ -1998,14 +2112,16 @@ export default function DailyReportsPage() {
               <Sparkles className="h-4 w-4" />
               <span>{generatingAI && selectedAnalysisType === 'summary' ? 'Analyzing...' : 'Generate Concise AI Summary'}</span>
             </button>
-            <button
-              onClick={handleShareWhatsappReport}
-              disabled={!whatsappReportText}
-              className="flex-1 btn-secondary flex items-center justify-center space-x-2 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <Send className="h-4 w-4" />
-              <span>WhatsApp Short Report</span>
-            </button>
+            {!isPmcMember && (
+              <button
+                onClick={handleShareWhatsappReport}
+                disabled={!whatsappReportText}
+                className="flex-1 btn-secondary flex items-center justify-center space-x-2 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <Send className="h-4 w-4" />
+                <span>WhatsApp Short Report</span>
+              </button>
+            )}
           </div>
           {dailyAiDetailedAnalysis && selectedAnalysisType === 'detailed' && (
             <div className="bg-gray-50 rounded-lg p-4 mb-4">
@@ -2111,7 +2227,8 @@ export default function DailyReportsPage() {
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {questionBreakdowns.map((breakdown) => {
                       const Icon = breakdown.icon
-                      const showBinaryCounts = breakdown.yesCount > 0 || breakdown.noCount > 0
+                      const showBinaryCounts =
+                        breakdown.totalResponses > 0 || breakdown.yesFeederCount > 0 || breakdown.noFeederCount > 0
                       return (
                         <div key={`ai-breakdown-${breakdown.id}`} className="rounded-lg border border-gray-100 bg-white/60 p-4">
                           <div className="flex items-center justify-between">
@@ -2125,13 +2242,33 @@ export default function DailyReportsPage() {
                               </div>
                             </div>
                             {showBinaryCounts && (
-                              <div className="text-right text-xs text-gray-500">
-                                <p className="font-semibold text-emerald-600">
-                                  Yes: {breakdown.yesCount}
-                                </p>
-                                <p className="font-semibold text-rose-600">
-                                  No: {breakdown.noCount}
-                                </p>
+                              <div className="text-right text-xs text-gray-600 space-y-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenAnswerDetail(breakdown, 'yes')}
+                                  disabled={breakdown.yesFeederCount === 0}
+                                  className={`flex w-full items-center justify-end gap-2 rounded px-2 py-1 text-right transition ${
+                                    breakdown.yesFeederCount === 0
+                                      ? 'cursor-not-allowed text-gray-400'
+                                      : 'text-emerald-700 hover:bg-emerald-50'
+                                  }`}
+                                >
+                                  <span className="font-semibold">Yes: {breakdown.yesFeederCount}</span>
+                                  <span className="text-[11px] text-gray-500">feeder points</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenAnswerDetail(breakdown, 'no')}
+                                  disabled={breakdown.noFeederCount === 0}
+                                  className={`flex w-full items-center justify-end gap-2 rounded px-2 py-1 text-right transition ${
+                                    breakdown.noFeederCount === 0
+                                      ? 'cursor-not-allowed text-gray-400'
+                                      : 'text-rose-700 hover:bg-rose-50'
+                                  }`}
+                                >
+                                  <span className="font-semibold">No: {breakdown.noFeederCount}</span>
+                                  <span className="text-[11px] text-gray-500">feeder points</span>
+                                </button>
                               </div>
                             )}
                           </div>
@@ -2234,7 +2371,7 @@ export default function DailyReportsPage() {
         </div>
       </div>
 
-      {memberQuestionStats.length > 0 && (
+      {!isPmcMember && memberQuestionStats.length > 0 && (
         <div className="card">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
@@ -2371,6 +2508,61 @@ export default function DailyReportsPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {answerDetailModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center px-4 py-8">
+          <div className="bg-white w-full max-w-5xl max-h-[80vh] overflow-y-auto rounded-lg shadow-2xl p-6 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase font-semibold text-gray-500">AI Compliance Snapshot</p>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {answerDetailModal.questionLabel} — {answerDetailModal.answerType === 'yes' ? 'Yes' : 'No'} answers
+                </h3>
+                <p className="text-sm text-gray-600">
+                  Latest response per feeder point for this question.
+                </p>
+              </div>
+              <button
+                onClick={() => setAnswerDetailModal(null)}
+                className="rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                aria-label="Close feeder point answers"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            {answerDetailModal.entries.length === 0 ? (
+              <p className="text-sm text-gray-600">No feeder points have provided this answer yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200 text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-700">Feeder Point</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-700">Submitted By</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-700">Timestamp</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-700">Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 bg-white">
+                    {answerDetailModal.entries.map((entry, index) => (
+                      <tr key={`${answerDetailModal.questionId}-${entry.reportId}-${index}`} className="align-top">
+                        <td className="px-3 py-2 font-semibold text-gray-900">{entry.feederPointName}</td>
+                        <td className="px-3 py-2 text-gray-700">{entry.submittedBy}</td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {entry.submittedAt ? entry.submittedAt.toLocaleString() : 'Not provided'}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700">
+                          {entry.remarks || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -2618,40 +2810,46 @@ export default function DailyReportsPage() {
                 </div>
                 <div className="card mt-4">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => handleUpdateStatus('approved')}
-                      disabled={updatingStatus}
-                      className="w-full btn-primary flex items-center justify-center space-x-2"
-                    >
-                      <CheckCircle className="h-4 w-4" />
-                      <span>{updatingStatus ? 'Approving...' : 'Approve'}</span>
-                    </button>
-                    <button
-                      onClick={() => handleUpdateStatus('rejected')}
-                      disabled={updatingStatus}
-                      className="w-full btn-secondary flex items-center justify-center space-x-2 bg-red-500 hover:bg-red-600 text-white"
-                    >
-                      <X className="h-4 w-4" />
-                      <span>{updatingStatus ? 'Rejecting...' : 'Reject'}</span>
-                    </button>
-                    <button
-                      onClick={() => handleUpdateStatus('requires_action')}
-                      disabled={updatingStatus}
-                      className="w-full btn-secondary flex items-center justify-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white"
-                    >
-                      <AlertTriangle className="h-4 w-4" />
-                      <span>{updatingStatus ? 'Updating...' : 'Action Required'}</span>
-                    </button>
-                    <button
-                      onClick={handleDownloadSelectedReport}
-                      disabled={downloadingReport}
-                      className="col-span-2 w-full btn-secondary flex items-center justify-center space-x-2"
-                    >
-                      <Download className="h-4 w-4" />
-                      <span>{downloadingReport ? 'Preparing report...' : 'Download Report (with photos)'}</span>
-                    </button>
-                  </div>
+                  {!isPmcMember ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => handleUpdateStatus('approved')}
+                        disabled={updatingStatus}
+                        className="w-full btn-primary flex items-center justify-center space-x-2"
+                      >
+                        <CheckCircle className="h-4 w-4" />
+                        <span>{updatingStatus ? 'Approving...' : 'Approve'}</span>
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus('rejected')}
+                        disabled={updatingStatus}
+                        className="w-full btn-secondary flex items-center justify-center space-x-2 bg-red-500 hover:bg-red-600 text-white"
+                      >
+                        <X className="h-4 w-4" />
+                        <span>{updatingStatus ? 'Rejecting...' : 'Reject'}</span>
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus('requires_action')}
+                        disabled={updatingStatus}
+                        className="w-full btn-secondary flex items-center justify-center space-x-2 bg-orange-500 hover:bg-orange-600 text-white"
+                      >
+                        <AlertTriangle className="h-4 w-4" />
+                        <span>{updatingStatus ? 'Updating...' : 'Action Required'}</span>
+                      </button>
+                      <button
+                        onClick={handleDownloadSelectedReport}
+                        disabled={downloadingReport}
+                        className="col-span-2 w-full btn-secondary flex items-center justify-center space-x-2"
+                      >
+                        <Download className="h-4 w-4" />
+                        <span>{downloadingReport ? 'Preparing report...' : 'Download Report (with photos)'}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">
+                      Actions are available to administrators only.
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

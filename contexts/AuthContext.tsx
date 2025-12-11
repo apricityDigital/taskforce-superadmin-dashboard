@@ -4,7 +4,7 @@ interface User {
   id: string;
   name: string;
   email: string;
-  role: 'admin';
+  role: 'admin' | 'pmc_member';
 }
 
 interface AuthContextType {
@@ -52,6 +52,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         setUser(adminUser);
         localStorage.setItem('user', JSON.stringify(adminUser));
+        return;
+      }
+
+      if (email === 'iswm.pmc@gmail.com') {
+        if (password !== 'pmc789@#') {
+          throw new Error('Invalid PMC credentials');
+        }
+
+        const pmcUser: User = {
+          id: 'pmc-1',
+          name: 'PMC Member',
+          email: 'iswm.pmc@gmail.com',
+          role: 'pmc_member',
+        };
+
+        setUser(pmcUser);
+        localStorage.setItem('user', JSON.stringify(pmcUser));
         return;
       }
 
