@@ -15,7 +15,9 @@ import {
   Bell,
   FileText,
   BarChart3,
-  Sparkles
+  Sparkles,
+  ClipboardCheck,
+  UserPlus
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 
@@ -31,6 +33,8 @@ const navigation = [
   { name: 'Daily Reports', href: '/daily-reports', icon: FileText },
   { name: 'Employee Tracker', href: '/employee-tracker', icon: BarChart3 },
   { name: 'Improvement Summary', href: '/improvement-summary', icon: Sparkles },
+  { name: 'PMC Employees', href: '/pmc-employees', icon: UserPlus },
+  { name: 'PMC Employee Work', href: '/pmc-employee-action', icon: ClipboardCheck },
   { name: 'Complaints', href: '/complaints', icon: MessageSquare },
   { name: 'Settings', href: '/settings', icon: Settings },
 ]

@@ -27,12 +27,17 @@ export interface User {
   email: string;
   phone: string;
   role: string;
+  employeeCode?: string;
+  zoneNumber?: string;
   organization?: string;
   department?: string;
   isActive: boolean;
   createdAt: any;
   lastLogin?: any;
   password?: string;
+  permissions?: string[];
+  approvedAt?: any;
+  approvedBy?: string;
 }
 
 export interface ComplianceReport {
@@ -50,9 +55,11 @@ export interface ComplianceReport {
     address: string;
   };
   distanceFromFeederPoint: number; // in meters
-  status: 'pending' | 'approved' | 'rejected' | 'requires_action';
+  status: 'pending' | 'approved' | 'rejected' | 'requires_action' | 'action_taken';
   answers: ComplianceAnswer[];
   adminNotes?: string;
+  actionTakenNote?: string;
+  actionTakenPhoto?: string;
   reviewedBy?: string;
   reviewedAt?: any;
   createdAt: any;
@@ -682,6 +689,41 @@ export class DataService {
     return partialMatch ?? null;
   }
 
+  static async deletePmcEmployee(userId: string): Promise<void> {
+    await deleteDoc(doc(db, 'approvedUsers', userId));
+  }
+
+  static async createPmcEmployee(input: {
+    name: string;
+    employeeCode: string;
+    email: string;
+    phone: string;
+    password: string;
+    zoneNumber: string | number;
+    createdBy?: string;
+  }): Promise<void> {
+    const userId = `pmc_${input.employeeCode || Date.now()}`;
+    const normalizedZone = String(input.zoneNumber).trim();
+
+    const payload: Omit<User, 'id'> = {
+      name: input.name.trim(),
+      email: input.email.trim().toLowerCase(),
+      phone: input.phone.trim(),
+      role: 'pmc_member',
+      employeeCode: input.employeeCode.trim(),
+      zoneNumber: normalizedZone,
+      permissions: ['view_pmc_reports'],
+      isActive: true,
+      password: input.password,
+      approvedAt: serverTimestamp(),
+      approvedBy: input.createdBy || 'superadmin',
+      createdAt: serverTimestamp(),
+      lastLogin: null,
+    };
+
+    await setDoc(doc(db, 'approvedUsers', userId), payload);
+  }
+
   // Get all access requests
   static onAccessRequestsChange(callback: (requests: AccessRequest[]) => void) {
     const q = query(collection(db, 'accessRequests'), orderBy('createdAt', 'desc'));
@@ -743,7 +785,8 @@ export class DataService {
     reportId: string,
     status: ComplianceReport['status'],
     adminNotes?: string,
-    reviewedBy?: string
+    reviewedBy?: string,
+    extra?: Partial<Pick<ComplianceReport, 'actionTakenNote' | 'actionTakenPhoto'>>
   ): Promise<void> {
     try {
       const updateData: any = {
@@ -757,6 +800,12 @@ export class DataService {
       }
       if (reviewedBy) {
         updateData.reviewedBy = reviewedBy;
+      }
+      if (extra?.actionTakenNote) {
+        updateData.actionTakenNote = extra.actionTakenNote;
+      }
+      if (extra?.actionTakenPhoto) {
+        updateData.actionTakenPhoto = extra.actionTakenPhoto;
       }
 
       await updateDoc(doc(db, 'complianceReports', reportId), updateData);
