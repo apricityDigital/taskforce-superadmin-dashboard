@@ -36,7 +36,7 @@ import {
   Award
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { DataService, ComplianceReport } from '@/lib/dataService'
+import { DataService, ComplianceReport, FeederPoint } from '@/lib/dataService'
 import { AIService, DailyReportData } from '@/lib/aiService'
 import { useAuth } from '@/contexts/AuthContext'
 import { SimpleBarChart } from '@/components/charts/SimpleBarChart'
@@ -274,6 +274,14 @@ const slugifyQuestionId = (value: string) => {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
+}
+
+const normalizeFeederPointValue = (value: string) => {
+  return value
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
 }
 
 const sanitizeFilenameSegment = (value: string, fallback = 'value') => {
@@ -1033,6 +1041,9 @@ export default function DailyReportsPage() {
   const [loading, setLoading] = useState(false)
   const [filterStatus, setFilterStatus] = useState<ComplianceReport['status'] | 'all'>('all')
   const [filterTrip, setFilterTrip] = useState<'all' | 1 | 2 | 3>('all')
+  const [feederPointDropdownFilter, setFeederPointDropdownFilter] = useState<'all' | string>('all')
+  const [feederPointManualFilter, setFeederPointManualFilter] = useState('')
+  const [feederPointOptions, setFeederPointOptions] = useState<Array<{ id: string; name: string }>>([])
   const [zoneFilter, setZoneFilter] = useState<'all' | string>('all')
   const [zoneOptions, setZoneOptions] = useState<Array<{ value: string; label: string }>>([])
   const [generatingAI, setGeneratingAI] = useState(false)
@@ -1060,6 +1071,11 @@ export default function DailyReportsPage() {
     answerType: 'yes' | 'no'
     entries: QuestionAnswerDetail[]
   } | null>(null)
+
+  const selectedFeederPointName = useMemo(() => {
+    if (feederPointDropdownFilter === 'all') return ''
+    return feederPointOptions.find(option => option.id === feederPointDropdownFilter)?.name?.trim() || ''
+  }, [feederPointDropdownFilter, feederPointOptions])
   
   const dateRangeLabel = useMemo(() => {
     if (useCustomRange && startDate && endDate) {
@@ -1426,10 +1442,30 @@ export default function DailyReportsPage() {
   }, [swachFilterOptions, swachFeederFilter, swachTripFilter])
 
   useEffect(() => {
+    if (
+      feederPointDropdownFilter !== 'all' &&
+      !feederPointOptions.some(option => option.id === feederPointDropdownFilter)
+    ) {
+      setFeederPointDropdownFilter('all')
+    }
+  }, [feederPointDropdownFilter, feederPointOptions])
+
+  useEffect(() => {
     if (zoneFilter !== 'all' && !zoneOptions.some(option => option.value === zoneFilter)) {
       setZoneFilter('all')
     }
   }, [zoneOptions, zoneFilter])
+
+  useEffect(() => {
+    const unsubscribe = DataService.onFeederPointsChange((points: FeederPoint[]) => {
+      const list = (points || [])
+        .filter(point => Boolean(point?.id) && Boolean(point?.name))
+        .map(point => ({ id: point.id, name: point.name }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+      setFeederPointOptions(list)
+    })
+    return () => unsubscribe()
+  }, [])
 
   useEffect(() => {
     setLoading(true)
@@ -1444,6 +1480,27 @@ export default function DailyReportsPage() {
 
         return reportDate === selectedDate
       })
+
+      const effectiveManualFeeder = feederPointManualFilter.trim()
+      const hasDropdownFilter = feederPointDropdownFilter !== 'all'
+      const normalizedDropdownName = selectedFeederPointName ? normalizeFeederPointValue(selectedFeederPointName) : ''
+      const normalizedManualFilter = effectiveManualFeeder ? normalizeFeederPointValue(effectiveManualFeeder) : ''
+
+      if (hasDropdownFilter || normalizedManualFilter) {
+        filteredReports = filteredReports.filter(report => {
+          const reportFeederId = report.feederPointId?.toString?.() || ''
+          const reportFeederName = report.feederPointName?.toString?.() || ''
+          const normalizedReportName = normalizeFeederPointValue(reportFeederName)
+
+          if (hasDropdownFilter) {
+            if (reportFeederId && reportFeederId === feederPointDropdownFilter) return true
+            if (normalizedDropdownName && normalizedReportName === normalizedDropdownName) return true
+            return false
+          }
+
+          return normalizedReportName === normalizedManualFilter
+        })
+      }
 
       const zoneMap = new Map<string, string>()
       filteredReports.forEach(report => {
@@ -1491,7 +1548,18 @@ export default function DailyReportsPage() {
     })
 
     return () => unsubscribe()
-  }, [selectedDate, filterStatus, filterTrip, zoneFilter, useCustomRange, startDate, endDate])
+  }, [
+    selectedDate,
+    filterStatus,
+    filterTrip,
+    zoneFilter,
+    feederPointDropdownFilter,
+    feederPointManualFilter,
+    selectedFeederPointName,
+    useCustomRange,
+    startDate,
+    endDate,
+  ])
 
   useEffect(() => {
     if (!useCustomRange) {
@@ -2009,6 +2077,44 @@ export default function DailyReportsPage() {
                 <option value="2">Trip 2</option>
                 <option value="3">Trip 3</option>
               </select>
+            </div>
+
+            <div className="relative">
+              <select
+                value={feederPointDropdownFilter}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setFeederPointDropdownFilter(value === 'all' ? 'all' : value)
+                  if (value !== 'all') {
+                    setFeederPointManualFilter('')
+                  }
+                }}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">All Feeder Points</option>
+                {feederPointOptions.map(option => (
+                  <option key={option.id} value={option.id}>
+                    {option.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="relative">
+              <input
+                type="text"
+                value={feederPointManualFilter}
+                disabled={feederPointDropdownFilter !== 'all'}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setFeederPointManualFilter(value)
+                  if (value.trim()) {
+                    setFeederPointDropdownFilter('all')
+                  }
+                }}
+                placeholder="Feeder point (manual)"
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100"
+              />
             </div>
 
            <div className="relative">
