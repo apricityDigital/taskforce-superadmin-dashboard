@@ -177,6 +177,40 @@ export interface FeederPoint {
   lastInspection?: any; // Firestore timestamp
 }
 
+export interface FeederPointRequest {
+  id: string;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  userPhone?: string;
+  coordinates?: {
+    latitude: number;
+    longitude: number;
+  };
+  areaName?: string;
+  areaDescription?: string;
+  zoneNumber?: string;
+  wardNumber?: string;
+  populationDensity?: 'low' | 'medium' | 'high';
+  accessibility?: 'easy' | 'moderate' | 'difficult';
+  additionalDetails?: string;
+  imageURL?: string;
+  kothiName?: string;
+  feederPointName?: string;
+  nearestLandmark?: string;
+  approximateHouseholds?: string;
+  vehicleType?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  priority?: 'low' | 'medium' | 'high';
+  adminNotes?: string;
+  rejectionReason?: string;
+  reviewedBy?: string;
+  reviewedAt?: any;
+  submittedAt?: any;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
 export class DataService {
   private static coerceDate(value: any): Date | null {
     if (!value) {
@@ -722,6 +756,32 @@ export class DataService {
     };
 
     await setDoc(doc(db, 'approvedUsers', userId), payload);
+  }
+
+  static onFeederPointRequestsChange(callback: (requests: FeederPointRequest[]) => void) {
+    const q = query(collection(db, 'feederPointRequests'), orderBy('submittedAt', 'desc'));
+    return onSnapshot(q, snapshot => {
+      const requests = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as FeederPointRequest));
+      callback(requests);
+    });
+  }
+
+  static async getFeederPointRequests(status?: 'pending' | 'approved' | 'rejected' | 'all'): Promise<FeederPointRequest[]> {
+    const qRef = query(collection(db, 'feederPointRequests'), orderBy('submittedAt', 'desc'));
+    const snapshot = await getDocs(qRef);
+    let requests = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    } as FeederPointRequest));
+
+    if (status && status !== 'all') {
+      requests = requests.filter(request => request.status === status);
+    }
+
+    return requests;
   }
 
   // Get all access requests
