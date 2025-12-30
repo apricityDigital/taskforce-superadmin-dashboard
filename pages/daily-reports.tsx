@@ -157,6 +157,18 @@ interface QuestionAnswerRecord {
   count: number;
 }
 
+type AppliedFilters = {
+  selectedDate: string;
+  useCustomRange: boolean;
+  startDate: string;
+  endDate: string;
+  filterStatus: ComplianceReport['status'] | 'all';
+  filterTrip: 'all' | 1 | 2 | 3;
+  feederPointDropdownFilter: 'all' | string;
+  feederPointManualFilter: string;
+  zoneFilter: 'all' | string;
+};
+
 const MEMBER_QUESTION_CONFIG: MemberQuestionConfig[] = [
   {
     id: 'scp_area_clean',
@@ -1072,25 +1084,89 @@ export default function DailyReportsPage() {
     entries: QuestionAnswerDetail[]
   } | null>(null)
 
-  const selectedFeederPointName = useMemo(() => {
-    if (feederPointDropdownFilter === 'all') return ''
-    return feederPointOptions.find(option => option.id === feederPointDropdownFilter)?.name?.trim() || ''
-  }, [feederPointDropdownFilter, feederPointOptions])
+  const [appliedFilters, setAppliedFilters] = useState<AppliedFilters>({
+    selectedDate,
+    useCustomRange,
+    startDate,
+    endDate,
+    filterStatus,
+    filterTrip,
+    feederPointDropdownFilter,
+    feederPointManualFilter,
+    zoneFilter,
+  })
+
+  const {
+    selectedDate: appliedSelectedDate,
+    useCustomRange: appliedUseCustomRange,
+    startDate: appliedStartDate,
+    endDate: appliedEndDate,
+    filterStatus: appliedFilterStatus,
+    filterTrip: appliedFilterTrip,
+    feederPointDropdownFilter: appliedFeederPointDropdownFilter,
+    feederPointManualFilter: appliedFeederPointManualFilter,
+    zoneFilter: appliedZoneFilter,
+  } = appliedFilters
+
+  const appliedSelectedFeederPointName = useMemo(() => {
+    if (appliedFeederPointDropdownFilter === 'all') return ''
+    return feederPointOptions.find(option => option.id === appliedFeederPointDropdownFilter)?.name?.trim() || ''
+  }, [appliedFeederPointDropdownFilter, feederPointOptions])
   
   const dateRangeLabel = useMemo(() => {
-    if (useCustomRange && startDate && endDate) {
-      const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
-      return sanitizeFilenameSegment(`${rangeStart}_to_${rangeEnd}`, selectedDate)
+    if (appliedUseCustomRange && appliedStartDate && appliedEndDate) {
+      const [rangeStart, rangeEnd] = appliedStartDate <= appliedEndDate ? [appliedStartDate, appliedEndDate] : [appliedEndDate, appliedStartDate]
+      return sanitizeFilenameSegment(`${rangeStart}_to_${rangeEnd}`, appliedSelectedDate)
     }
-    return sanitizeFilenameSegment(selectedDate, selectedDate)
-  }, [useCustomRange, startDate, endDate, selectedDate])
+    return sanitizeFilenameSegment(appliedSelectedDate, appliedSelectedDate)
+  }, [appliedUseCustomRange, appliedStartDate, appliedEndDate, appliedSelectedDate])
   const zoneLabelForFilename = useMemo(() => {
-    if (zoneFilter === 'all') {
+    if (appliedZoneFilter === 'all') {
       return 'All_Zones'
     }
-    const option = zoneOptions.find(option => option.value === zoneFilter)
-    return sanitizeFilenameSegment(option?.label || zoneFilter, 'Zone')
-  }, [zoneFilter, zoneOptions])
+    const option = zoneOptions.find(option => option.value === appliedZoneFilter)
+    return sanitizeFilenameSegment(option?.label || appliedZoneFilter, 'Zone')
+  }, [appliedZoneFilter, zoneOptions])
+
+  const handleApplyFilters = () => {
+    setLoading(true)
+    setAppliedFilters({
+      selectedDate,
+      useCustomRange,
+      startDate,
+      endDate,
+      filterStatus,
+      filterTrip,
+      feederPointDropdownFilter,
+      feederPointManualFilter,
+      zoneFilter,
+    })
+  }
+
+  const handleResetFilters = () => {
+    const today = new Date().toISOString().split('T')[0]
+    setSelectedDate(today)
+    setUseCustomRange(false)
+    setStartDate(today)
+    setEndDate(today)
+    setFilterStatus('all')
+    setFilterTrip('all')
+    setFeederPointDropdownFilter('all')
+    setFeederPointManualFilter('')
+    setZoneFilter('all')
+    setLoading(true)
+    setAppliedFilters({
+      selectedDate: today,
+      useCustomRange: false,
+      startDate: today,
+      endDate: today,
+      filterStatus: 'all',
+      filterTrip: 'all',
+      feederPointDropdownFilter: 'all',
+      feederPointManualFilter: '',
+      zoneFilter: 'all',
+    })
+  }
   const captureSummarySnapshot = async () => {
     if (!summaryRef.current) return null
     const scale = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(2, window.devicePixelRatio) : 2
@@ -1258,24 +1334,24 @@ export default function DailyReportsPage() {
       buildWhatsappShortReport({
         reportSummary,
         questionBreakdowns,
-        zoneFilter,
+        zoneFilter: appliedZoneFilter,
         zoneOptions,
-        filterTrip,
-        useCustomRange,
-        startDate,
-        endDate,
-        selectedDate,
+        filterTrip: appliedFilterTrip,
+        useCustomRange: appliedUseCustomRange,
+        startDate: appliedStartDate,
+        endDate: appliedEndDate,
+        selectedDate: appliedSelectedDate,
       }),
     [
       reportSummary,
       questionBreakdowns,
-      zoneFilter,
+      appliedZoneFilter,
       zoneOptions,
-      filterTrip,
-      useCustomRange,
-      startDate,
-      endDate,
-      selectedDate,
+      appliedFilterTrip,
+      appliedUseCustomRange,
+      appliedStartDate,
+      appliedEndDate,
+      appliedSelectedDate,
     ]
   )
   const memberQuestionStats = useMemo(() => buildMemberQuestionStats(reports), [reports])
@@ -1473,17 +1549,17 @@ export default function DailyReportsPage() {
       console.log("All Compliance Reports (real-time):", allReports)
       let filteredReports = allReports.filter(report => {
         const reportDate = new Date(report.submittedAt.toDate()).toISOString().split('T')[0]
-        if (useCustomRange && startDate && endDate) {
-          const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
+        if (appliedUseCustomRange && appliedStartDate && appliedEndDate) {
+          const [rangeStart, rangeEnd] = appliedStartDate <= appliedEndDate ? [appliedStartDate, appliedEndDate] : [appliedEndDate, appliedStartDate]
           return reportDate >= rangeStart && reportDate <= rangeEnd
         }
 
-        return reportDate === selectedDate
+        return reportDate === appliedSelectedDate
       })
 
-      const effectiveManualFeeder = feederPointManualFilter.trim()
-      const hasDropdownFilter = feederPointDropdownFilter !== 'all'
-      const normalizedDropdownName = selectedFeederPointName ? normalizeFeederPointValue(selectedFeederPointName) : ''
+      const effectiveManualFeeder = appliedFeederPointManualFilter.trim()
+      const hasDropdownFilter = appliedFeederPointDropdownFilter !== 'all'
+      const normalizedDropdownName = appliedSelectedFeederPointName ? normalizeFeederPointValue(appliedSelectedFeederPointName) : ''
       const normalizedManualFilter = effectiveManualFeeder ? normalizeFeederPointValue(effectiveManualFeeder) : ''
 
       if (hasDropdownFilter || normalizedManualFilter) {
@@ -1493,7 +1569,7 @@ export default function DailyReportsPage() {
           const normalizedReportName = normalizeFeederPointValue(reportFeederName)
 
           if (hasDropdownFilter) {
-            if (reportFeederId && reportFeederId === feederPointDropdownFilter) return true
+            if (reportFeederId && reportFeederId === appliedFeederPointDropdownFilter) return true
             if (normalizedDropdownName && normalizedReportName === normalizedDropdownName) return true
             return false
           }
@@ -1515,19 +1591,19 @@ export default function DailyReportsPage() {
       setZoneOptions(zoneOptionList)
 
       // Apply status filter
-      if (filterStatus !== 'all') {
-        filteredReports = filteredReports.filter(report => report.status === filterStatus)
+      if (appliedFilterStatus !== 'all') {
+        filteredReports = filteredReports.filter(report => report.status === appliedFilterStatus)
       }
 
       // Apply trip filter
-      if (filterTrip !== 'all') {
-        filteredReports = filteredReports.filter(report => report.tripNumber === filterTrip)
+      if (appliedFilterTrip !== 'all') {
+        filteredReports = filteredReports.filter(report => report.tripNumber === appliedFilterTrip)
       }
 
-      if (zoneFilter !== 'all') {
+      if (appliedZoneFilter !== 'all') {
         filteredReports = filteredReports.filter(report => {
           const zoneInfo = getReportZoneInfo(report)
-          return zoneInfo?.normalized === zoneFilter
+          return zoneInfo?.normalized === appliedZoneFilter
         })
       }
 
@@ -1549,16 +1625,16 @@ export default function DailyReportsPage() {
 
     return () => unsubscribe()
   }, [
-    selectedDate,
-    filterStatus,
-    filterTrip,
-    zoneFilter,
-    feederPointDropdownFilter,
-    feederPointManualFilter,
-    selectedFeederPointName,
-    useCustomRange,
-    startDate,
-    endDate,
+    appliedSelectedDate,
+    appliedFilterStatus,
+    appliedFilterTrip,
+    appliedZoneFilter,
+    appliedFeederPointDropdownFilter,
+    appliedFeederPointManualFilter,
+    appliedSelectedFeederPointName,
+    appliedUseCustomRange,
+    appliedStartDate,
+    appliedEndDate,
   ])
 
   useEffect(() => {
@@ -1845,7 +1921,7 @@ export default function DailyReportsPage() {
 
       const feederSafe = sanitizeFilenameSegment(selectedReport.feederPointName || 'FeederPoint', 'FeederPoint')
       const tripSafe = sanitizeFilenameSegment(String(selectedReport.tripNumber || 'Trip'), 'Trip')
-      const dateSafe = sanitizeFilenameSegment(selectedReport.tripDate || selectedDate, 'Date')
+      const dateSafe = sanitizeFilenameSegment(selectedReport.tripDate || appliedSelectedDate, 'Date')
 
       addSectionTitle('Report Details')
       const distanceLabel =
@@ -1927,28 +2003,40 @@ export default function DailyReportsPage() {
     setGeneratingAI(true)
     setSelectedAnalysisType(type)
     try {
-      let effectiveDateLabel = selectedDate
-      if (useCustomRange && startDate && endDate) {
-        const [rangeStart, rangeEnd] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate]
+      const totalReports = reports.length
+      const resolvedReports = reports.filter(report => report.status === 'approved').length
+      const completedInspections = reports.filter(report => report.status !== 'pending').length
+      const uniqueReporterCount = new Set(
+        reports.map(report => (report.userId || report.userName || 'unknown_reporter').toString())
+      ).size
+      const uniqueFeederCount = new Set(
+        reports.map(report => (report.feederPointId || report.feederPointName || 'unknown_feeder').toString())
+      ).size
+
+      let effectiveDateLabel = appliedSelectedDate
+      if (appliedUseCustomRange && appliedStartDate && appliedEndDate) {
+        const [rangeStart, rangeEnd] = appliedStartDate <= appliedEndDate ? [appliedStartDate, appliedEndDate] : [appliedEndDate, appliedStartDate]
         effectiveDateLabel = `${rangeStart} to ${rangeEnd}`
       }
 
       const reportData: DailyReportData = {
         date: effectiveDateLabel,
         metrics: {
-          totalUsers: 0, // This data is not available from compliance reports
+          totalUsers: uniqueReporterCount,
           newRegistrations: 0, // This data is not available from compliance reports
-          totalComplaints: reportSummary.total,
-          resolvedComplaints: reportSummary.approved,
-          activeFeederPoints: 0, // This data is not available from compliance reports
-          completedInspections: reportSummary.approved, // Assuming approved reports are completed inspections
+          totalComplaints: totalReports,
+          resolvedComplaints: resolvedReports,
+          activeFeederPoints: uniqueFeederCount,
+          completedInspections,
         },
         performance: {
-          complaintResolutionRate: reportSummary.total > 0
-            ? Math.round((reportSummary.approved / reportSummary.total) * 100)
+          complaintResolutionRate: totalReports > 0
+            ? Math.round((resolvedReports / totalReports) * 100)
             : 0,
           userGrowth: 0, // Not available
-          operationalEfficiency: 0, // Not available
+          operationalEfficiency: totalReports > 0
+            ? Math.round((completedInspections / totalReports) * 100)
+            : 0,
         },
         rawReports: reports // Pass the raw reports for detailed analysis
       }
@@ -2131,9 +2219,23 @@ export default function DailyReportsPage() {
                 ))}
               </select>
             </div>
-         
-            
-           
+
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handleApplyFilters}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold shadow-sm hover:bg-blue-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={loading}
+              >
+                {loading ? 'Applying...' : 'Apply Filters'}
+              </button>
+              <button
+                onClick={handleResetFilters}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={loading}
+              >
+                Reset
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2165,7 +2267,7 @@ export default function DailyReportsPage() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">Report Status Distribution</h3>
                 <p className="text-sm text-gray-600">
-                  Breakdown of report statuses for the selected {useCustomRange ? 'date range' : 'date'}.
+                  Breakdown of report statuses for the selected {appliedUseCustomRange ? 'date range' : 'date'}.
                 </p>
               </div>
             </div>
@@ -2190,7 +2292,7 @@ export default function DailyReportsPage() {
               </div>
             ) : (
               <p className="mt-6 text-sm text-gray-500">
-                No reports available for the selected {useCustomRange ? 'date range.' : 'date.'}
+                No reports available for the selected {appliedUseCustomRange ? 'date range.' : 'date.'}
               </p>
             )}
           </div>
@@ -2732,7 +2834,7 @@ export default function DailyReportsPage() {
             <FileText className="mx-auto h-16 w-16 text-gray-400 mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">No Reports Found</h3>
             <p className="text-gray-600 mb-6">
-              No reports were found for the selected date.
+              No reports were found for the selected filters.
             </p>
           </div>
         )}

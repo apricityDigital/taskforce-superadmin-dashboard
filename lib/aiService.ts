@@ -277,30 +277,79 @@ Provide a summary of the day's operations, approximately 300 words. This summary
    * Simulate AI analysis when API is not available
    */
   public static simulateAnalysis(reportData: DailyReportData): { detailed: string, summary: string } {
-    const resolutionRate = reportData.performance.complaintResolutionRate;
-    const totalReports = reportData.metrics.totalComplaints;
-    const approvedReports = reportData.metrics.resolvedComplaints;
-    const pendingReports = totalReports - approvedReports;
-
-    let segregationIssues = '';
-    const mixedWasteFeederPoints: string[] = [];
-    reportData.rawReports.forEach(report => {
-      const wasteSegregatedAnswer = report.answers.find(a => a.questionId === 'waste_segregated');
-      if (wasteSegregatedAnswer && (wasteSegregatedAnswer.answer === 'no' || wasteSegregatedAnswer.notes?.toLowerCase().includes('mixed'))) {
-        mixedWasteFeederPoints.push(report.feederPointName);
-      }
-    });
-
-    if (mixedWasteFeederPoints.length > 0) {
-      segregationIssues = `\n\nWaste Segregation Analysis:\nObservations indicate that waste segregation is a recurring issue. Specifically, feeder points such as ${mixedWasteFeederPoints.join(', ')} reported instances of mixed waste. This impacts processing efficiency and environmental compliance.`;
+    const rawReports = reportData.rawReports || [];
+    if (!rawReports.length) {
+      const message = `No compliance reports are available for ${reportData.date}.`;
+      return { detailed: message, summary: message };
     }
 
-    // Generate the specific "yes/no" counts summary for simulation
+    const formatQuestionLabel = (questionId: string) =>
+      (questionId || 'question')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+
+    const summarizeList = (items: string[], limit = 4) => {
+      if (!items.length) return '';
+      const displayed = items.slice(0, limit);
+      const suffix = items.length > limit ? '...' : '';
+      return `${displayed.join(', ')}${suffix}`;
+    };
+
+    const statusCounts: Record<ComplianceReport['status'], number> = {
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+      requires_action: 0,
+      action_taken: 0,
+    };
+    rawReports.forEach(report => {
+      statusCounts[report.status] = (statusCounts[report.status] || 0) + 1;
+    });
+
+    const totalReports = rawReports.length;
+    const approvedReports = statusCounts.approved || 0;
+    const pendingReports = statusCounts.pending || 0;
+    const actionRequiredReports = statusCounts.requires_action || 0;
+    const rejectedReports = statusCounts.rejected || 0;
+    const completedReports = totalReports - pendingReports;
+    const resolutionRate = totalReports > 0 ? Math.round((approvedReports / totalReports) * 100) : 0;
+
+    const uniqueReporters = new Set(
+      rawReports.map(report => (report.userId || report.userName || 'unknown_reporter').toString())
+    ).size;
+    const uniqueFeeders = new Set(
+      rawReports.map(report => (report.feederPointId || report.feederPointName || 'unknown_feeder').toString())
+    ).size;
+
+    const feederSummaries = new Map<string, { statusCounts: Record<string, number>; trips: Set<string>; reportIds: string[] }>();
+    rawReports.forEach(report => {
+      const key = report.feederPointName || report.feederPointId || 'Unknown Feeder Point';
+      if (!feederSummaries.has(key)) {
+        feederSummaries.set(key, { statusCounts: {}, trips: new Set<string>(), reportIds: [] });
+      }
+      const entry = feederSummaries.get(key)!;
+      entry.statusCounts[report.status] = (entry.statusCounts[report.status] || 0) + 1;
+      entry.trips.add(report.tripNumber ? String(report.tripNumber) : '');
+      entry.reportIds.push(report.id);
+    });
+
+    const feederLines = Array.from(feederSummaries.entries()).map(([name, detail]) => {
+      const statusLabel = Object.entries(detail.statusCounts)
+        .filter(([, count]) => count > 0)
+        .map(([status, count]) => `${count} ${status.replace(/_/g, ' ')}`)
+        .join(', ') || 'no status recorded';
+      const trips = Array.from(detail.trips).filter(Boolean).sort();
+      const tripLabel = trips.length ? ` | trips ${trips.join(', ')}` : '';
+      const reportLabel = ` | reports: ${summarizeList(detail.reportIds, 5)}`;
+      return `- ${name}: ${statusLabel}${tripLabel}${reportLabel}`;
+    });
+
     const questionDetails = new Map<string, Map<string, { count: number; reportIds: string[]; notes: string[] }>>();
 
-    reportData.rawReports.forEach(report => {
+    rawReports.forEach(report => {
       report.answers.forEach(answer => {
-        const { questionId, answer: userAnswer, notes } = answer;
+        const questionId = answer.questionId || 'unspecified_question';
+        const userAnswer = (typeof answer.answer === 'string' ? answer.answer : String(answer.answer)).trim();
 
         if (!questionDetails.has(questionId)) {
           questionDetails.set(questionId, new Map<string, { count: number; reportIds: string[]; notes: string[] }>());
@@ -313,64 +362,80 @@ Provide a summary of the day's operations, approximately 300 words. This summary
         const detail = answerMap.get(userAnswer)!;
         detail.count++;
         detail.reportIds.push(report.id);
-        if (notes) {
-          detail.notes.push(`Report ${report.id}: ${notes}`);
+        if (answer.notes) {
+          detail.notes.push(`Report ${report.id} (${report.feederPointName || 'Unknown Feeder'}): ${answer.notes}`);
         }
       });
     });
 
-    let numericalSummary = 'Numerical Summary of Key Questions:\n';
-    const yesNoQuestions = [
-      'scp_area_clean',
-      'waste_segregated',
-      'staff_present',
-      'workers_wearing_uniform',
-      'collection_team_mixing_waste',
-      'driver_helper_uniform',
-      'vehicle_separate_compartments',
-    ];
-
-    yesNoQuestions.forEach(questionId => {
-      const answerMap = questionDetails.get(questionId);
-      if (answerMap) {
-        const yesCount = answerMap.get('yes')?.count || 0;
-        const noCount = answerMap.get('no')?.count || 0;
-        
-        let questionText = questionId.replace(/_/g, ' '); // Format questionId for readability
-        numericalSummary += `For "${questionText}": ${yesCount} reports answered 'yes' and ${noCount} reports answered 'no'.\n`;
-      }
+    const questionBreakdownLines: string[] = [];
+    questionDetails.forEach((answerMap, questionId) => {
+      const total = Array.from(answerMap.values()).reduce((sum, entry) => sum + entry.count, 0);
+      const answers = Array.from(answerMap.entries())
+        .sort((a, b) => b[1].count - a[1].count)
+        .map(([answer, detail]) => {
+          const percentage = total > 0 ? Math.round((detail.count / total) * 100) : 0;
+          const reportsLabel = detail.reportIds.length ? ` [reports: ${summarizeList(detail.reportIds, 3)}]` : '';
+          return `${detail.count} "${answer}" (${percentage}%)${reportsLabel}`;
+        });
+      questionBreakdownLines.push(`- ${formatQuestionLabel(questionId)} (${total} responses): ${answers.join('; ')}`);
     });
 
-    const detailedReport = `
-${numericalSummary}
-DETAILED REPORT:
+    const attentionLines: string[] = [];
+    questionDetails.forEach((answerMap, questionId) => {
+      const negativeAnswers = ['no', 'not available', 'requires_action', 'pending'];
+      answerMap.forEach((detail, answer) => {
+        if (negativeAnswers.some(flag => answer.toLowerCase().includes(flag))) {
+          attentionLines.push(
+            `${detail.count} responses flagged for "${formatQuestionLabel(questionId)}" (${answer}) [reports: ${summarizeList(detail.reportIds, 4)}]`
+          );
+        }
+      });
+    });
 
-Comprehensive Daily Operational Analysis for ${reportData.date}
+    const notedComments = rawReports.flatMap(report => {
+      const answerNotes = (report.answers || [])
+        .filter(answer => Boolean(answer.notes))
+        .map(answer => `Report ${report.id} (${report.feederPointName || 'Unknown Feeder'} - ${formatQuestionLabel(answer.questionId)}): ${answer.notes}`);
+      const description = report.description ? [`Report ${report.id} (${report.feederPointName || 'Unknown Feeder'}): ${report.description}`] : [];
+      return [...answerNotes, ...description];
+    });
+    const noteLines = summarizeList(notedComments, 8);
 
-Overall Performance:
-Today's operations saw a total of ${totalReports} compliance reports submitted. Of these, ${approvedReports} were approved, resulting in a resolution rate of ${resolutionRate}%. ${pendingReports} reports remain pending, requiring further review.
+    const detailedReportSections = [
+      `Daily Compliance Analysis (${reportData.date})`,
+      '',
+      'Operational Overview:',
+      `- ${totalReports} reports from ${uniqueReporters} inspectors across ${uniqueFeeders} feeder points.`,
+      `- Status mix: ${approvedReports} approved, ${pendingReports} pending, ${actionRequiredReports} requires action, ${rejectedReports} rejected.`,
+      `- Resolution rate: ${resolutionRate}% | Completed inspections: ${completedReports}.`,
+      '',
+      'Feeder Coverage:',
+      feederLines.length ? feederLines.join('\n') : 'No feeder-level breakdown available.',
+      '',
+      'Question & Answer Breakdown:',
+      questionBreakdownLines.length ? questionBreakdownLines.join('\n') : 'No answers were captured in the selected reports.',
+      '',
+      'Attention Items:',
+      attentionLines.length ? attentionLines.join('\n') : 'No negative responses flagged in this set of reports.',
+      '',
+      'Field Notes:',
+      noteLines || 'No notes were provided by inspectors.',
+    ];
 
-Key Insights and Trends:
-${segregationIssues}
+    const conciseSummaryLines = [
+      `Summary for ${reportData.date}: ${totalReports} reports (${uniqueFeeders} feeder points, ${uniqueReporters} inspectors).`,
+      `Statuses: ${approvedReports} approved | ${pendingReports} pending | ${actionRequiredReports} requires action | ${rejectedReports} rejected (resolution rate ${resolutionRate}%).`,
+      questionBreakdownLines.length ? `Top question signals: ${questionBreakdownLines.slice(0, 2).join(' | ')}` : 'No question-level responses recorded.',
+      attentionLines.length ? `Attention: ${attentionLines.slice(0, 2).join(' | ')}` : 'No attention items detected from responses.',
+      feederLines.length ? `Feeder coverage: ${feederLines.slice(0, 2).join(' | ')}` : '',
+      noteLines ? `Noted comments: ${noteLines}` : '',
+    ].filter(Boolean);
 
-Operational Efficiency:
-The current operational efficiency is being impacted by inconsistent waste segregation practices. Addressing this will streamline waste processing and improve overall compliance.
-
-Recommendations:
-1. Implement targeted training for field teams on waste segregation protocols.
-2. Conduct surprise inspections at feeder points identified with segregation issues.
-3. Enhance monitoring mechanisms to identify and address non-compliance promptly.
-`;
-
-    const conciseSummary = `
-${numericalSummary}
-
-Daily Operational Summary for ${reportData.date}
-
-Today's operations processed ${totalReports} compliance reports, with a ${resolutionRate}% approval rate. A primary challenge identified is inconsistent waste segregation, particularly at feeder points like ${mixedWasteFeederPoints.join(', ')}. This issue requires immediate attention to improve processing efficiency and environmental adherence. Recommendations include targeted training and enhanced monitoring. Overall, the system demonstrates capacity, but specific operational adjustments are needed to optimize waste management practices and ensure full compliance with environmental standards. The taskforce continues to monitor and adapt to daily operational challenges, striving for continuous improvement in urban waste management. Further efforts will focus on reinforcing best practices and leveraging technology for better oversight. This summary provides a high-level overview for ministerial review, highlighting key performance indicators and areas requiring strategic intervention to maintain and enhance public service delivery.
-    `;
-
-    return { detailed: detailedReport, summary: conciseSummary };
+    return {
+      detailed: detailedReportSections.join('\n'),
+      summary: conciseSummaryLines.join('\n'),
+    };
   }
 
   private static simulateComplianceAnalysis(request: ComplianceAnalysisRequest): string {
